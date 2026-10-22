@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<!-- ═══ SUKHA PRANA · ПАНЕЛЬ КОМАНДЫ — страница приложения (app.sukhaprana.ru) ═══
+     Здесь только «каркас»: подключение оформления, настроек и кода.
+     Менять ничего не нужно — настройки в config.js. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sukha Prana · Команда</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- Установка на телефон как приложение -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#F7F6FB">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Sukha Prana">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<!-- Шрифты и оформление -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="panel.css">
+<style>html,body{margin:0;background:#F7F6FB} #sp-app{min-height:100vh;padding-top:env(safe-area-inset-top)}</style>
+</head>
+<body>
+<!-- Место, куда рисуется панель -->
+<div id="sp-app"><div class="wrap" id="sp-root"></div></div>
+<!-- Настройки → код панели -->
+<script src="config.js"></script>
+<script src="panel.js"></script>
+<!-- Фоновый помощник: пуш-уведомления и работа при плохом интернете -->
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});</script>
+</body>
+</html>
