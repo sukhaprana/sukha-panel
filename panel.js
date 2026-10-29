@@ -56,6 +56,8 @@ const CONFIG = Object.assign({
    ════════════════════════════════════════════════════════════════════════ */
 /* ---------- 2. УТИЛИТЫ ---------- */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeUrl = u => { const s = String(u ?? '').trim(); return /^(?:https?:|mailto:|tel:|\/|#)/i.test(s) ? esc(s) : '#'; };
+const safeImg = s => { const str = String(s ?? '').trim(); return (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,/i.test(str) || /^https?:\/\//i.test(str)) ? esc(str) : ''; };
 const pad = n => String(n).padStart(2,'0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const parseYmd = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
@@ -1223,17 +1225,112 @@ const ava = (id, sm) => { const u = userById(id) || trainerById(id); if (!u) ret
 const avatarPicker = (cur, act, id) => `<div class="ava-pick" role="group" aria-label="Выбор аватара">${['', ...AVATARS].map(a => `<button type="button" class="ap${(cur||'')===a?' on':''}" data-act="${act}" data-a="${a}" ${id?`data-id="${id}"`:''} aria-label="${a?'Аватар '+a:'Буква имени'}">${a || 'Аб'}</button>`).join('')}</div>`;
 const pendingUsers = () => (S.data?.users||[]).filter(u => u.status==='pending');
 
-function render(){
-  if (!S.user && S.bootError && Api.token){ root.innerHTML = `<div class="login"><div class="card" style="max-width:420px;margin:60px auto;text-align:center"><h3>Нет связи с сервером</h3>
-    <p class="muted">${esc(S.bootError)}</p><div class="toolbar" style="justify-content:center"><button class="btn primary" data-act="boot-retry">Повторить</button><button class="btn ghost" data-act="logout">Войти заново</button></div></div></div>`; return; }
-  if (!S.user){ root.innerHTML = viewLogin(); return; }
+function getTabsList(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
-  const tabs = [
+  return [
     ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'],
     ...(Rules.canSeePayroll(S.user) ? [['sal','Продажи и зарплата']] : []),
     ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
     ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
   ];
+}
+
+function updateBannersState(){
+  const over = allOverdue().length;
+  const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
+  const navScroll = root.querySelector('.tabs-scroll');
+  if (!navScroll) return;
+
+  // Баннер заявок
+  let pendBanner = root.querySelector('.banner.info');
+  if (pend && S.view !== 'team'){
+    if (!pendBanner){
+      const div = document.createElement('div');
+      div.className = 'banner info';
+      div.setAttribute('role', 'status');
+      div.innerHTML = `<div><b>Новые заявки на доступ: ${pend}.</b> <span class="muted small">Сотрудник войдёт в панель только после вашего подтверждения.</span></div><button class="btn sm primary" data-act="view" data-v="team">Посмотреть</button>`;
+      navScroll.after(div);
+    }
+  } else if (pendBanner){
+    pendBanner.remove();
+  }
+
+  // Баннер просроченных
+  let overBanner = root.querySelector('.banner[role=alert]');
+  if (over && ['day','cal','stats'].includes(S.view) && !S.overdueOnly){
+    if (!overBanner){
+      const ref = root.querySelector('.banner.info') || navScroll;
+      const div = document.createElement('div');
+      div.className = 'banner';
+      div.setAttribute('role', 'alert');
+      div.innerHTML = `<div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><div><b>Внимание: есть просроченные задачи — ${over}.</b> <span class="muted small">Невыполненное переносится на сегодня, пока его не закроют.</span></div></div><button class="btn sm" data-act="show-overdue">Показать просроченные</button>`;
+      ref.after(div);
+    }
+  } else if (overBanner){
+    overBanner.remove();
+  }
+}
+
+function switchTab(targetView){
+  const tabs = getTabsList();
+  if (!tabs.some(t => t[0] === targetView)) targetView = 'day';
+  
+  const mainEl = root.querySelector('main');
+  const tabsNav = root.querySelector('.tabs');
+  
+  // Быстрое переключение без пересоздания DOM шапки и навигации
+  if (S.user && mainEl && tabsNav && !S.modal){
+    S.view = targetView;
+    S.overdueOnly = false;
+    
+    // Закрываем шторку "Ещё" если была открыта
+    const overlay = root.querySelector('.sheet-o');
+    if (overlay) overlay.remove();
+
+    // Верхние вкладки
+    tabsNav.querySelectorAll('.tab').forEach(b => {
+      const active = b.dataset.v === S.view;
+      b.classList.toggle('on', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    // Нижняя мобильная навигация
+    const bnav = root.querySelector('.bnav');
+    if (bnav){
+      const mainKeys = ['day','sched','rep'];
+      bnav.querySelectorAll('.bn[data-act="view"]').forEach(b => {
+        b.classList.toggle('on', b.dataset.v === S.view);
+      });
+      const moreBtn = bnav.querySelector('.bn[data-act="more"]');
+      if (moreBtn){
+        moreBtn.classList.toggle('on', !mainKeys.includes(S.view));
+      }
+    }
+
+    updateBannersState();
+
+    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin };
+    if (views[S.view]) {
+      mainEl.innerHTML = views[S.view]();
+    }
+    root.querySelectorAll('input[type=range].rng').forEach(paintRange);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    return;
+  }
+
+  S.view = targetView;
+  S.overdueOnly = false;
+  S.modal = null;
+  render();
+  window.scrollTo({ top: 0 });
+}
+
+function render(){
+  if (!S.user && S.bootError && Api.token){ root.innerHTML = `<div class="login"><div class="card" style="max-width:420px;margin:60px auto;text-align:center"><h3>Нет связи с сервером</h3>
+    <p class="muted">${esc(S.bootError)}</p><div class="toolbar" style="justify-content:center"><button class="btn primary" data-act="boot-retry">Повторить</button><button class="btn ghost" data-act="logout">Войти заново</button></div></div></div>`; return; }
+  if (!S.user){ root.innerHTML = viewLogin(); return; }
+  const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
+  const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
   const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin };
   const unread = unreadCount();
@@ -1615,7 +1712,7 @@ function viewRev(){
   const fromMap = S.data.reviews.filter(r => r.origin==='map');
   const mapCard = (name, url, stat, src) => `<div class="mapcard"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><b>${name}</b>${stat?`<span class="stars">★ <span style="color:var(--ink);font-weight:700">${Number(stat.rating).toFixed(1)}</span></span>`:''}</div>
     <span class="small muted">${stat ? `${stat.ratings?stat.ratings+' оценок · ':''}${stat.reviews} отзывов на карте · ${fromMap.filter(r=>r.source===src).length} уже в панели` : 'нет данных'}</span>
-    <a class="btn sm" href="${url}" target="_blank" rel="noopener">Открыть на карте ↗</a></div>`;
+    <a class="btn sm" href="${safeUrl(url)}" target="_blank" rel="noopener">Открыть на карте ↗</a></div>`;
   return `<div style="display:flex;flex-direction:column;gap:18px">
     <div class="toolbar"><h2>Отзывы</h2></div>
     <div class="card"><div class="card-h"><h3>Автоподгрузка с карт</h3>
@@ -1634,7 +1731,7 @@ function viewRev(){
     <div class="card"><div class="card-h"><h3>Все отзывы <span class="muted small num">${S.data.reviews.length}</span></h3><div class="chips">${[['all','Все'],['map','С карт'],['manual','Внесены вручную'],['new','Ждут подтверждения']].map(([k,l])=>`<button class="chip${S.revFilter===k?' on':''}" data-act="rev-filter" data-k="${k}">${l}</button>`).join('')}</div></div>
       ${list.map(r => `<div class="rev"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><b>${esc(r.client)}</b> <span class="stars" aria-label="${r.rating} из 5">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div>
         <span class="small muted">${fmtDay(r.date)} · ${SOURCES[r.source]||r.source}${r.origin==='map'?' · загружен автоматически':' · внёс(ла) '+esc(nameOf(r.createdBy))}</span></div><p>${esc(r.text)}</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${r.origin==='map' ? `<span class="badge b-wait">С карт</span>${r.url?`<a class="small" style="color:var(--accent-text)" href="${esc(r.url)}" target="_blank" rel="noopener">Открыть на карте ↗</a>`:''}`
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${r.origin==='map' ? `<span class="badge b-wait">С карт</span>${r.url?`<a class="small" style="color:var(--accent-text)" href="${safeUrl(r.url)}" target="_blank" rel="noopener">Открыть на карте ↗</a>`:''}`
           : (r.confirmed?`<span class="badge b-done">Подтверждён · ${esc(nameOf(r.confirmedBy))}</span>`:`<span class="badge b-work">Ждёт подтверждения</span>`)
           + (Rules.canConfirmReview(S.user) ? ` <button class="btn sm${r.confirmed?'':' primary'}" data-act="confirm-rev" data-id="${r.id}" data-v="${r.confirmed?0:1}">${r.confirmed?'Снять подтверждение':'Подтвердить'}</button>` : '')}</div></div>`).join('') || '<p class="muted">Отзывов нет.</p>'}
     </div></div>`;
@@ -1651,7 +1748,7 @@ function viewGuide(){
       ${can?'<button class="btn" data-act="guide-import">Загрузить из Word</button><button class="btn primary" data-act="guide-new">+ Инструкция</button>':''}</div>
     ${can ? `<p class="small muted">Заготовки помечены «черновик». Инструкции можно загрузить из файла Word (.docx) вместе с фотографиями: заголовок в документе станет названием инструкции, пункты и абзацы под ним — шагами, фото прикрепятся к шагу, рядом с которым стоят.</p>` : ''}
     <div>${list.map(g => editing && editing.id===g.id ? guideEditor() : `<details class="acc"${q?' open':''}><summary>${esc(g.title)} ${g.draft?'<span class="draft">черновик</span>':''}${normSteps(g).some(x=>x.img)?'<span class="tag">с фото</span>':''}<span class="chev">›</span></summary>
-      <div class="body"><ol>${normSteps(g).map(st => `<li><div class="step">${st.t?`<span>${esc(st.t)}</span>`:''}${st.img?`<img class="step-img" src="${esc(st.img)}" alt="Фото к шагу" loading="lazy" data-act="zoom">`:''}</div></li>`).join('')}</ol>
+      <div class="body"><ol>${normSteps(g).map(st => `<li><div class="step">${st.t?`<span>${esc(st.t)}</span>`:''}${st.img?`<img class="step-img" src="${safeImg(st.img)}" alt="Фото к шагу" loading="lazy" data-act="zoom">`:''}</div></li>`).join('')}</ol>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span class="small muted">${g.updatedBy?'Обновил(а) '+esc(nameOf(g.updatedBy))+', '+fmtDT(g.updatedAt):'Заготовка'}${g.sourceFile?' · из файла '+esc(g.sourceFile):''}</span>${can?`<button class="btn sm" data-act="guide-edit" data-id="${g.id}">Редактировать</button>`:''}</div></div></details>`).join('')}
     ${editing && !editing.id ? guideEditor() : ''}
     ${!list.length && !(editing && !editing.id) ? '<div class="empty">Ничего не найдено.</div>' : ''}</div></div>`;
@@ -1662,7 +1759,7 @@ function guideEditor(){
     <div class="field"><span class="small muted" style="font-weight:600">Шаги (до ${CONFIG.GUIDE_MAX_STEPS}) — к каждому можно приложить фото</span>
     <div style="display:flex;flex-direction:column;gap:10px">${g.steps.map((st,i) => `<div class="step-row"><span class="step-n">${i+1}</span>
       <textarea class="input" rows="2" data-gstep="${i}" aria-label="Шаг ${i+1}" placeholder="Что сделать">${esc(st.t)}</textarea>
-      <div class="step-media">${st.img ? `<img src="${esc(st.img)}" alt="Фото к шагу ${i+1}"><button type="button" class="btn ghost sm" data-act="step-img-del" data-i="${i}">убрать фото</button>`
+      <div class="step-media">${st.img ? `<img src="${safeImg(st.img)}" alt="Фото к шагу ${i+1}"><button type="button" class="btn ghost sm" data-act="step-img-del" data-i="${i}">убрать фото</button>`
         : `<label class="btn sm">Фото<input type="file" accept="image/*" data-gimg="${i}" hidden></label>`}</div>
       <button type="button" class="iconbtn" data-act="step-del" data-i="${i}" aria-label="Удалить шаг ${i+1}">✕</button></div>`).join('')}</div>
     ${g.steps.length < CONFIG.GUIDE_MAX_STEPS ? '<button type="button" class="btn sm" data-act="step-add" style="align-self:flex-start">+ Шаг</button>' : ''}</div>
@@ -2748,7 +2845,7 @@ root.addEventListener('click', e => {
     case 'boot-retry': S.bootError=''; run(async () => { await loadAll(); }); break;
     case 'reset-demo': S.modal = { type:'confirm', title:'Сбросить демо-данные?', text:'Все изменения в прототипе удалятся, вернутся задачи из ваших таблиц.', yes:'Сбросить', on: async () => { DemoServer.reset(); await loadAll(); toast('Демо-данные восстановлены'); } }; render(); break;
     /* навигация */
-    case 'view': S.view = el.dataset.v; S.overdueOnly=false; S.modal=null; render(); window.scrollTo({ top:0 }); break;
+    case 'view': switchTab(el.dataset.v); break;
     case 'show-overdue': S.view='day'; S.overdueOnly=true; render(); break;
     case 'hide-overdue': S.overdueOnly=false; render(); break;
     case 'day-shift': S.date = addDays(S.date, Number(el.dataset.n)); S.overdueOnly=false; render(); break;
