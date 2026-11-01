@@ -20,6 +20,12 @@
 (function(){
 'use strict';
 
+/* ВЕРСИЯ СБОРКИ ПАНЕЛИ. Показывается на экране входа и в профиле; сервер сверяет её
+   при каждом обновлении данных (bootstrap.build) и подсказывает, какая из сторон устарела.
+   При публикации новой версии: увеличьте BUILD здесь, CORE_BUILD (общий с сервером) и ?v=… в index.html. */
+const BUILD = 3;
+const BUILD_NAME = 'v3 · 1 ноября 2026';
+
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 1 · НАСТРОЙКИ (CONFIG)
    Что делает:   режим работы, адрес сервера, сроки по умолчанию, ссылки на карты.
@@ -48,6 +54,9 @@ const CONFIG = Object.assign({
 }, (typeof window!=='undefined' && window.SP_CONFIG) || {});  // window.SP_CONFIG — из config.js, перекрывает значения выше
 
 /*@CORE-START — отсюда и до @CORE-END код общий для браузера и Google Apps Script */
+/* Версия данных/протокола: панель и сервер сверяют её, чтобы подсказать, что нужно обновить.
+   panel.js BUILD == Code.gs CORE_BUILD в одной поставке. */
+const CORE_BUILD = 3;
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 2 · УТИЛИТЫ
    Что делает:   даты, деньги, экранирование текста — мелкие помощники для всего кода.
@@ -116,6 +125,8 @@ const Rules = {
   canIssuePayout: u => isOwner(u) || isManager(u) || isAdminRole(u),
   canConfirmReview: u => isOwner(u) || isManager(u),
   canEditGuide: u => isOwner(u) || isManager(u),
+  /* Важные контакты: редактируют владельцы, управляющий и администраторы; СММ — только читает */
+  canEditContacts: u => isOwner(u) || isManager(u) || isAdminRole(u),
   canManageTeam: u => isOwner(u),
   canEditTemplates: u => isOwner(u) || isManager(u),
   canEditSchedule: u => isOwner(u) || isManager(u),
@@ -501,7 +512,19 @@ function buildSeed(){
   // Пример задачи с пунктами: уборка каждый день
   templates.push({ id:'r15', title:'Уборка — проверка', desc:'Пройтись по чек-листу и отметить каждый пункт.', days:D, level:'team', assignee:'', dueTime:'20:30', priority:'mid', active:true,
     checklist:['Проверить чистоту зеркал','Проверить чистоту туалета','Проверить чистоту ванной комнаты','Коврики и пропсы разложены','Пол в залах чистый','Зона ожидания: чай, вода, стаканы'] });
-  return { users, trainers, notifications, tasks, templates, payouts, reviews, guide, settings, sales, payroll, plans, penalties, finance, debt, schedule, reports, finConfig, rates, pay, v:6 };
+  /* Важные контакты (раздел «База»): тренера · коллаборации · поставщики и услуги.
+     У «услуг» есть свободный тип (визитки, чай, уборка…) — по нему контакты группируются. */
+  const contacts = [
+    { id:'c1', cat:'trainer', type:'', name:'Ирина Соловьёва — хатха-йога (внешний тренер)', phone:'+7 900 111-22-33', tg:'irina_yoga', email:'', note:'Свободна по утрам вт/чт. Замены на групповые занятия.', createdBy:'u3', createdAt:T+'T10:00:00' },
+    { id:'c2', cat:'collab', type:'', name:'Студия растяжки «Меридиан»', phone:'+7 901 555-66-77', tg:'meridian_studio', email:'hi@meridian.ru', note:'Кросс-промо в соцсетях, совместные марафоны. Контакт — Анна.', createdBy:'u1', createdAt:T+'T10:00:00' },
+    { id:'c3', cat:'collab', type:'', name:'Клуб бегунов «Заря»', phone:'', tg:'zarya_run', email:'', note:'Взаимная реклама, совместные утренние пробежки от студии.', createdBy:'u1', createdAt:T+'T10:00:00' },
+    { id:'c4', cat:'vendor', type:'Визитки и полиграфия', name:'Типография «ПринтШоп»', phone:'+7 902 123-45-67', tg:'', email:'zakaz@printshop.ru', note:'Срочный заказ — 2 рабочих дня. Скидка 10% по слову «Сукха».', createdBy:'u2', createdAt:T+'T10:00:00' },
+    { id:'c5', cat:'vendor', type:'Визитки и полиграфия', name:'Студия дизайна «Лист» (макеты)', phone:'+7 903 777-88-99', tg:'list_design', email:'', note:'Делали последнее меню и подарочные сертификаты.', createdBy:'u2', createdAt:T+'T10:00:00' },
+    { id:'c6', cat:'vendor', type:'Чай и напитки', name:'«Чайный дом» — оптовые поставки', phone:'+7 904 000-11-22', tg:'', email:'opt@chaydom.ru', note:'Прайс — в гайде. Доставка по вторникам, минимальный заказ 5 000 ₽.', createdBy:'u3', createdAt:T+'T10:00:00' },
+    { id:'c7', cat:'vendor', type:'Уборка и химчистка', name:'Клининг «Чистый зал»', phone:'+7 905 333-44-55', tg:'', email:'', note:'Генеральная уборка раз в месяц, коврики — химчистка.', createdBy:'u3', createdAt:T+'T10:00:00' },
+    { id:'c8', cat:'other', type:'', name:'Ремонт оборудования (пропсы, коврики)', phone:'+7 906 987-65-43', tg:'', email:'', note:'Мастер Дима. Выезд по студиям — бесплатно.', createdBy:'u4', createdAt:T+'T10:00:00' }
+  ];
+  return { users, trainers, contacts, contactsInit:true, notifications, tasks, templates, payouts, reviews, guide, settings, sales, payroll, plans, penalties, finance, debt, schedule, reports, finConfig, rates, pay, v:6 };
 }
 
 function instFromTemplate(tp, day, by){
@@ -555,6 +578,9 @@ function computeLinkedProgress(tasks, pid){
      onEvent(type, data, db)        события для Telegram и пушей
      extra(ctx) → { action(payload, user, token) }      дополнительные действия сервера
      publicActions: [...]           действия без входа
+     sendResetCode(user, code, db) → {sent, via}  доставка кода восстановления (Apps Script: Telegram, затем почта)
+     hashCode(s) → строка           хэш кода восстановления (Apps Script: SHA-256)
+     dropAllFor(userId, db)         закрыть все сеансы пользователя (после смены пароля)
      reload: true                   перечитывать данные на каждый запрос (Apps Script)
      delay: мс                      имитация сети (демо) */
 function createServer(opts){
@@ -662,6 +688,84 @@ function createServer(opts){
     },
     logout(_, u, token){ if (opts.dropToken) { opts.dropToken(token, db); save(); } return { ok:true };
     },
+    /* ---------- ВОССТАНОВЛЕНИЕ ПАРОЛЯ («Забыли пароль?» на экране входа) ----------
+       Шаг 1 requestReset: человек вводит логин/почту/телефон → сервер ищет аккаунт и отправляет
+       6-значный код в Telegram (если привязан) или на почту. Код живёт 15 минут.
+       Шаг 2 confirmReset: код + новый пароль → все прежние сеансы этого человека закрываются.
+       Безопасность: ответ одинаковый, существует аккаунт или нет (нельзя перебирать логины);
+       в рабочей версии код НЕ возвращается в браузер — только доставкой; лимиты:
+       5 кодов в час на аккаунт и 5 попыток ввода кода. */
+    requestReset({ login }){
+      const q = String(login||'').trim().toLowerCase(); const qp = normPhone(q);
+      const u = db.users.find(x => (x.login && x.login.toLowerCase()===q) || (x.email && x.email.toLowerCase()===q) || (qp.length>=10 && normPhone(x.phone)===qp));
+      const silent = { ok:true, sent:false };   // одинаковый ответ и когда аккаунта нет — не раскрываем логины
+      if (!u || !u.active || u.status!=='active') return silent;
+      db.resetLimit = db.resetLimit || {};
+      const hour = Math.floor(Date.now()/36e5);
+      const rec = db.resetLimit[u.id];
+      if (rec && rec.hour===hour && rec.n >= 5) return silent;   // не чаще 5 кодов в час
+      db.resetLimit[u.id] = { hour, n: (rec && rec.hour===hour ? rec.n : 0) + 1 };
+      const code = String(Math.floor(100000 + Math.random()*900000));
+      db.resetCodes = db.resetCodes || {};
+      db.resetCodes[u.id] = { hash:String(opts.hashCode ? opts.hashCode(code) : hash(code)), exp:Date.now() + 15*60000, tries:0 };
+      /* Доставка: в рабочей версии — Telegram/почта (код не покидает сервер), в демо — показывается на экране */
+      const delivery = opts.sendResetCode ? opts.sendResetCode(u, code, db) : null;
+      save();
+      return opts.sendResetCode ? { ok:true, sent:!!(delivery && delivery.sent), via:(delivery && delivery.via) || '' }
+                                : { ok:true, sent:true, via:'demo', demoCode:code };
+    },
+    confirmReset({ login, code, pass }){
+      const q = String(login||'').trim().toLowerCase(); const qp = normPhone(q);
+      const u = db.users.find(x => (x.login && x.login.toLowerCase()===q) || (x.email && x.email.toLowerCase()===q) || (qp.length>=10 && normPhone(x.phone)===qp));
+      if (!u) err('Аккаунт не найден. Проверьте логин.','AUTH');
+      const rec = (db.resetCodes||{})[u.id];
+      if (!rec || rec.exp < Date.now()){ if (rec) delete db.resetCodes[u.id]; save(); err('Код истёк или уже использован. Запросите новый.','AUTH'); }
+      rec.tries++;
+      if (rec.tries > 5){ delete db.resetCodes[u.id]; save(); err('Слишком много неверных попыток. Запросите новый код.','AUTH'); }
+      const wrongCode = () => { save(); err('Неверный код. Осталось попыток: ' + Math.max(0, 5 - rec.tries) + '.','AUTH'); };
+      if (String(opts.hashCode ? opts.hashCode(String(code)) : hash(String(code))) !== rec.hash) return wrongCode();
+      if (String(pass||'').length < 6) err('Пароль — минимум 6 символов.','VALIDATION');
+      setPass(u, pass);
+      delete db.resetCodes[u.id];
+      if (opts.dropAllFor) opts.dropAllFor(u.id, db);   // прежние сеансы закрываются
+      save();
+      return { ok:true };
+    },
+    /* Смена своего пароля из профиля. Старый сеанс остаётся, остальные закрываются.
+       Ошибка кода VALIDATION (а не AUTH), чтобы неверный старый пароль не разлогинивал человека */
+    changeMyPass({ oldPass, newPass }, u){
+      if (!checkPass(u, String(oldPass||''))) err('Старый пароль неверен.','VALIDATION');
+      if (String(newPass||'').length < 6) err('Новый пароль — минимум 6 символов.','VALIDATION');
+      if (String(newPass) === String(oldPass)) err('Новый пароль совпадает со старым.','VALIDATION');
+      setPass(u, newPass);
+      if (opts.dropAllFor){ opts.dropAllFor(u.id, db); const t = opts.issueToken(u, db); save(); return { ok:true, token:t }; }
+      save(); return { ok:true };
+    },
+    /* ---------- ВАЖНЫЕ КОНТАКТЫ (раздел «База»): тренера, коллаборации, поставщики и услуги ---------- */
+    saveContact({ contact }, u){
+      if (!Rules.canEditContacts(u)) err('Контакты редактируют владельцы, управляющий и администраторы.');
+      db.contacts = db.contacts || [];
+      const c = { cat:'vendor', type:'', phone:'', tg:'', email:'', note:'', ...contact };
+      if (!String(c.name||'').trim()) err('Укажите название или имя контакта.','VALIDATION');
+      if (!['trainer','collab','vendor','other'].includes(c.cat)) err('Неизвестная категория контакта.','VALIDATION');
+      /* Обрезаем и чистим поля — защита от раздувания хранилища */
+      c.name = String(c.name).trim().slice(0,120);
+      c.type = String(c.type||'').trim().slice(0,60);
+      c.phone = String(c.phone||'').trim().slice(0,30);
+      c.tg = String(c.tg||'').trim().replace(/^@/,'').slice(0,60);
+      c.email = String(c.email||'').trim().slice(0,120);
+      c.note = String(c.note||'').trim().slice(0,500);
+      if (c.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email)) err('Проверьте адрес почты.','VALIDATION');
+      if (c.phone && normPhone(c.phone).length < 6) err('Проверьте телефон.','VALIDATION');
+      const old = db.contacts.find(x => x.id===c.id);
+      if (old){ c.createdBy = old.createdBy; c.createdAt = old.createdAt; }
+      else { c.id = c.id || uid('c'); c.createdBy = u.id; c.createdAt = nowIso(); }
+      upsert(db.contacts, c); save(); return { contacts: db.contacts };
+    },
+    deleteContact({ id }, u){
+      if (!Rules.canEditContacts(u)) err('Контакты редактируют владельцы, управляющий и администраторы.');
+      db.contacts = (db.contacts||[]).filter(x => x.id!==id); save(); return { contacts: db.contacts };
+    },
     /* Регистрация: аккаунт создаётся неактивным, владельцам уходит уведомление
        (в рабочей версии — ещё и письмо на почту владельцев через Apps Script) */
     register({ fullName, role, phone, email, pass }){
@@ -681,7 +785,15 @@ function createServer(opts){
       return { ok:true };
     },
     bootstrap(_, u){
-      generateRecurring(); save();
+      generateRecurring();
+      /* Разовая миграция: «Важные контакты» появились в v3 — при первом открытии переносим
+         туда тренеров с телефонами из «Команды», чтобы раздел не был пустым (contactsInit — метка «уже сделано») */
+      if (!db.contactsInit){
+        db.contactsInit = true;
+        db.contacts = (db.contacts || []).concat((db.trainers || []).filter(t => t.active && t.phone)
+          .map(t => ({ id:uid('c'), cat:'trainer', type:'', name:t.fullName, phone:String(t.phone||'').slice(0,30), tg:'', email:'', note:t.note || '', createdBy:'system', createdAt:nowIso() })));
+      }
+      save();
       const levels = Rules.levelsFor(u); const owner = isOwner(u); const pay = Rules.canSeePayroll(u);
       return {
         user: pubUser(u, true),
@@ -690,6 +802,8 @@ function createServer(opts){
           return x.active && x.status === 'active'; // остальные — только активных
         }).map(x => pubUser(x, owner)),
         trainers: db.trainers,
+        contacts: db.contacts || [],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
+        build: CORE_BUILD,            /* версия сервера: панель сверяет со своей и подсказывает, кому пора обновиться */
         tasks: db.tasks.filter(t => Rules.canSeeTask(u,t)),
         templates: db.templates.filter(t => levels.includes(t.level)),
         payouts: db.payouts.map(p => Rules.seeAmounts(u) ? p : ({ ...p, amount:null, comment: '' })),
@@ -1190,7 +1304,7 @@ function createServer(opts){
   };
 
   if (opts.extra) Object.assign(handlers, opts.extra({ get db(){ return db; }, save, err, pubUser, upsert, setPass, checkPass, syncReviewsCore, generateRecurring }));
-  const PUBLIC = ['login','register', ...(opts.publicActions||[])];
+  const PUBLIC = ['login','register','requestReset','confirmReset', ...(opts.publicActions||[])];
   function callSync(action, payload, token){
     if (!db || opts.reload) load();
     const h = Object.prototype.hasOwnProperty.call(handlers, action) ? handlers[action] : null;
@@ -1266,7 +1380,7 @@ const Api = {
     } catch(e){
       if (e.name==='AbortError') e.message = 'Сервер не ответил за 20 секунд. Проверьте интернет и повторите.';
       else if (e instanceof TypeError) e.message = 'Нет связи с сервером. Проверьте интернет и повторите.';
-      if (e.code==='AUTH' && action!=='login' && action!=='register'){ Auth.logout(true); }
+      if (e.code==='AUTH' && action!=='login' && action!=='register' && action!=='requestReset' && action!=='confirmReset'){ Auth.logout(true); }
       throw e;
     }
   }
@@ -1282,7 +1396,9 @@ const Api = {
 const S = { user:null, data:null, view:'day', date:todayStr(), person:'all', level:'all', block:'all', overdueOnly:false, calMonth:todayStr().slice(0,7),
   payMonth:todayStr().slice(0,7), salMonth:todayStr().slice(0,7), finMonth:todayStr().slice(0,7), salAdmin:'', revFilter:'all', guideDraft:null, guideQuery:'',
   expanded:{ ongoing:false }, modal:null, busy:false, lastBadges:new Map(), loginPick:'', authMode:'login',
-  navOpen:'', /* какая группа верхней навигации раскрыта (группировка вкладок) */ salPresetKind:'staff', copyMonthFrom:'' }; /* salPresetKind — тип пресета ставок в «Продажах и зарплате» */
+  navOpen:'', /* какая группа верхней навигации раскрыта (группировка вкладок) */ salPresetKind:'staff', copyMonthFrom:'',
+  contactQuery:'', /* поиск в «Важных контактах» */
+  resetLogin:'', resetMsg:'', resetDemo:'' /* экран «Забыли пароль?»: логин, сообщение о доставке, код демо-режима */ }; /* salPresetKind — тип пресета ставок в «Продажах и зарплате» */
 
 const Auth = {
   async login(login, pass){
@@ -1393,7 +1509,7 @@ const activeStaff = () => (S.data?.users||[]).filter(u => u.active && u.status==
 function getTabsList(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   return [
-    ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'],
+    ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'], ['contacts','Контакты'],
     ...(Rules.canSeePayroll(S.user) ? [['sal','Продажи и зарплата']] : []),
     ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
     ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
@@ -1409,7 +1525,7 @@ const NAV_GROUPS = [
   { k:'work',  label:'Работа',     tabs:['day','sched','rep','cal'] },
   { k:'pulse', label:'Показатели', tabs:['stats','rev'] },
   { k:'money', label:'Деньги',     tabs:['pay','sal','fin'] },
-  { k:'know',  label:'База',       tabs:['guide'] },
+  { k:'know',  label:'База',       tabs:['guide','contacts'] },   /* знания студии + важные контакты */
   { k:'team',  label:'Команда',    tabs:['team'] }
 ];
 /* Собираем группы из видимых вкладок (используется и мобильной шторкой «Ещё») */
@@ -1521,7 +1637,7 @@ function switchTab(targetView){
 
     updateBannersState();
 
-    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin };
+    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
     if (views[S.view]) {
       mainEl.innerHTML = views[S.view]();
     }
@@ -1545,7 +1661,7 @@ function render(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
-  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin };
+  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
   const unread = unreadCount();
   root.innerHTML = `
     <header class="top">
@@ -1558,6 +1674,8 @@ function render(){
       </div>
     </header>
     <nav class="tabs-scroll" aria-label="Разделы"><div class="tabs nav-groups" role="tablist">${navGroupsHtml()}</div></nav>
+    ${S.data.build > BUILD ? `<div class="banner upd" role="status"><div><b>Доступна новая версия панели.</b> <span class="muted small">Нажмите «Обновить» — или замените файлы на хостинге, если кнопка не помогает.</span></div><button class="btn sm primary" data-act="upd-reload">Обновить</button></div>` : ''}
+    ${(!S.data.build || S.data.build < BUILD) ? `<div class="banner upd" role="status"><div><b>Сервер панели старее приложения: новых функций не будет.</b> <span class="muted small">Замените Code.gs в Apps Script и сделайте «Управление развертываниями → Изменить → Новая версия».</span></div></div>` : ''}
     ${pend && S.view!=='team' ? `<div class="banner info" role="status"><div><b>Новые заявки на доступ: ${pend}.</b> <span class="muted small">Сотрудник войдёт в панель только после вашего подтверждения.</span></div><button class="btn sm primary" data-act="view" data-v="team">Посмотреть</button></div>` : ''}
     ${over && ['day','cal','stats'].includes(S.view) && !S.overdueOnly ? `<div class="banner" role="alert"><div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><div><b>Внимание: есть просроченные задачи — ${over}.</b> <span class="muted small">Невыполненное переносится на сегодня, пока его не закроют.</span></div></div><button class="btn sm" data-act="show-overdue">Показать просроченные</button></div>` : ''}
     <main>${views[S.view]()}</main>
@@ -1570,6 +1688,31 @@ function render(){
 /* --- Вход и регистрация --- */
 function viewLogin(){
   const brand = `<div class="brand" style="justify-content:center"><div class="mark">${ICON_LOTUS}</div><div><div class="brand-name">Sukha Prana</div><div class="brand-sub">Панель команды · только для сотрудников</div></div></div>`;
+  const foot = `<div class="small muted" style="text-align:center;opacity:.75">Сборка ${BUILD_NAME}${CONFIG.MODE==='demo'?' · демо-режим':''}</div>`;
+  /* --- Восстановление пароля, шаг 1: куда отправить код --- */
+  if (S.authMode==='forgot') return `<div class="login">${brand}
+    <form class="card" id="forgot-form" autocomplete="on" novalidate>
+      <h2 style="font-size:28px">Забыли пароль?</h2>
+      <p class="small muted">Введите логин, почту или телефон — отправим код восстановления в Telegram (если привязан) или на почту. Код действует 15 минут.</p>
+      <div class="field"><label for="fg-login">Логин, почта или телефон</label><input class="input" id="fg-login" autocomplete="username" required value="${esc(S.resetLogin)}"></div>
+      <div id="fg-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
+      <button class="btn primary" type="submit" id="fg-btn">Отправить код</button>
+      <button class="btn ghost" type="button" data-act="auth-mode" data-m="login">← Ко входу</button>
+    </form>${foot}</div>`;
+  /* --- Восстановление пароля, шаг 2: код + новый пароль --- */
+  if (S.authMode==='forgot2') return `<div class="login">${brand}
+    <form class="card" id="forgot2-form" autocomplete="on" novalidate>
+      <h2 style="font-size:28px">Новый пароль</h2>
+      ${S.resetDemo ? `<div class="note" style="margin-bottom:10px"><b>Демо-режим: код ${esc(S.resetDemo)}.</b> <span class="small muted">В рабочей версии код приходит в Telegram или на почту и на экране не показывается.</span></div>` : ''}
+      ${S.resetMsg ? `<p class="small muted">${esc(S.resetMsg)}</p>` : ''}
+      <div class="field"><label for="fg2-login">Логин, почта или телефон</label><input class="input" id="fg2-login" autocomplete="username" required value="${esc(S.resetLogin)}"></div>
+      <div class="grid2">
+        <div class="field"><label for="fg2-code">Код из сообщения</label><input class="input" id="fg2-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required placeholder="6 цифр" autocomplete="one-time-code"></div>
+        <div class="field"><label for="fg2-p1">Новый пароль</label><input class="input" id="fg2-p1" type="password" autocomplete="new-password" minlength="6" required></div></div>
+      <div id="fg2-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
+      <button class="btn primary" type="submit" id="fg2-btn">Сменить пароль</button>
+      <button class="btn ghost" type="button" data-act="auth-mode" data-m="forgot">← Отправить код заново</button>
+    </form>${foot}</div>`;
   if (S.authMode==='done') return `<div class="login">${brand}<div class="card"><h2 style="font-size:28px">Заявка отправлена</h2>
     <p>Владелец получил уведомление. Как только он подтвердит доступ, войдите с вашей почтой или телефоном и паролем.</p>
     <button class="btn primary" data-act="auth-mode" data-m="login">Ко входу</button></div></div>`;
@@ -1600,9 +1743,10 @@ function viewLogin(){
       <div class="field"><label for="lg-pass">Пароль</label><input class="input" id="lg-pass" name="password" type="password" autocomplete="current-password" required value="${S.loginPick?'1234':''}"></div>
       <div id="lg-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="lg-btn">Войти</button>
+      <button class="btn ghost" type="button" data-act="auth-mode" data-m="forgot">Забыли пароль?</button>
       <button class="btn ghost" type="button" data-act="auth-mode" data-m="register">Нет доступа? Зарегистрироваться</button>
       ${demo}
-    </form></div>`;
+    </form>${foot}</div>`;
 }
 
 /* --- Чек-лист дня --- */
@@ -2114,6 +2258,47 @@ function viewTeam(){
   </div>`;
 }
 
+/* --- Важные контакты (раздел «База»): тренера · коллаборации · поставщики и услуги --- */
+const CONTACT_CATS = { trainer:'Тренеры', collab:'Коллаборации', vendor:'Поставщики и услуги', other:'Прочее' };
+function viewContacts(){
+  const canEdit = Rules.canEditContacts(S.user);
+  const q = (S.contactQuery||'').trim().toLowerCase();
+  const all = S.data.contacts || [];
+  const list = q ? all.filter(c => [c.name, c.type, c.note, c.phone, c.tg, c.email].join(' ').toLowerCase().includes(q)) : all;
+  const head = `<div class="toolbar" style="margin-bottom:14px"><h2>Важные контакты</h2><span class="spacer"></span>
+    <input class="input" id="f-contacts" type="search" placeholder="Поиск: имя, услуга, телефон…" value="${esc(S.contactQuery)}" style="width:min(300px,100%)">
+    ${canEdit ? '<button class="btn primary" data-act="contact-edit" data-id="">+ Контакт</button>' : ''}</div>`;
+  if (!all.length) return head + `<div class="section"><div class="empty">Здесь собираем полезных людей и компании: тренера и замены, коллаборации, поставщики и услуги — визитки, чай, уборка…${canEdit ? ' Нажмите «+ Контакт», чтобы добавить первый.' : ''}</div></div>`;
+  if (q && !list.length) return head + `<div class="section"><div class="empty">По запросу ничего не найдено.</div></div>`;
+  /* Карточка контакта: имя + тип услуги, контакты, заметка, кнопки действия */
+  const card = c => `<div class="ct-card">
+    <div class="ct-head"><b>${esc(c.name)}</b>${c.type ? `<span class="tag">${esc(c.type)}</span>` : ''}</div>
+    <div class="small muted">${[c.phone, c.tg ? '@' + esc(c.tg) : '', c.email].filter(Boolean).join(' · ') || 'контактов не указано'}</div>
+    ${c.note ? `<div class="small" style="margin-top:4px">${esc(c.note)}</div>` : ''}
+    <div class="toolbar" style="margin-top:8px">
+      ${c.phone ? `<a class="btn sm" href="tel:${esc(String(c.phone).replace(/[^\d+]/g,''))}">Позвонить</a>` : ''}
+      ${c.tg ? `<a class="btn sm" href="https://t.me/${encodeURIComponent(c.tg)}" target="_blank" rel="noopener">Telegram</a>` : ''}
+      ${c.email ? `<a class="btn sm" href="mailto:${esc(c.email)}">Почта</a>` : ''}
+      ${canEdit ? `<span class="spacer"></span><button class="btn ghost sm" data-act="contact-edit" data-id="${c.id}">Изменить</button>` : ''}
+    </div></div>`;
+  const sec = cat => {
+    const items = list.filter(c => c.cat===cat);
+    if (!items.length && q) return '';
+    if (cat==='vendor'){
+      /* Поставщики и услуги группируются по типу (визитки, чай, уборка…) */
+      const types = [...new Set(items.map(c => c.type || 'Без типа'))].sort((a,b) => a.localeCompare(b,'ru'));
+      return `<div class="section"><div class="sec-h"><span class="eyebrow">Поставщики и услуги</span><span class="muted small num">${items.length}</span><span class="line"></span></div>
+        ${types.map(t => `<div class="ct-sub">${esc(t)}</div><div class="ct-grid">${items.filter(c => (c.type||'Без типа')===t).map(card).join('')}</div>`).join('')}
+        ${!items.length ? '<div class="empty">Добавьте типографию, поставщика чая, клининг…</div>' : ''}</div>`;
+    }
+    const hints = { trainer:'Наши и внешние тренера: замены, подмены, новые направления.', collab:'Взаимные промо, совместные события, подарочные партнёры.', other:'Всё остальное, что важно держать под рукой.' };
+    return `<div class="section"><div class="sec-h"><span class="eyebrow">${CONTACT_CATS[cat]}</span><span class="muted small num">${items.length}</span><span class="line"></span></div>
+      ${!q ? `<p class="small muted">${hints[cat]}</p>` : ''}
+      <div class="ct-grid">${items.map(card).join('') || '<div class="empty">Пока пусто.</div>'}</div></div>`;
+  };
+  return head + sec('trainer') + sec('collab') + sec('vendor') + sec('other');
+}
+
 /* --- Модальные окна --- */
 const closeX = '<button type="button" class="iconbtn" data-act="close" aria-label="Закрыть">✕</button>';
 function renderModal(){
@@ -2123,6 +2308,15 @@ function renderModal(){
   if (m.type==='pass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="pass-form" data-id="${m.id}" style="max-width:420px"><div class="modal-h"><h3>Новый пароль · ${esc(nameOf(m.id))}</h3>${closeX}</div>
     <div class="field"><label for="pw-1">Пароль (от 6 символов)</label><input class="input" id="pw-1" type="password" minlength="6" required autocomplete="new-password"></div>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
+  /* Смена СВОЕГО пароля (профиль → «Сменить пароль») */
+  if (m.type==='changepass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="changepass-form" style="max-width:420px"><div class="modal-h"><h3>Сменить мой пароль</h3>${closeX}</div>
+    <div class="field"><label for="cp-0">Старый пароль</label><input class="input" id="cp-0" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="cp-1">Новый пароль (от 6 символов)</label><input class="input" id="cp-1" type="password" minlength="6" autocomplete="new-password" required></div>
+    <div class="field"><label for="cp-2">Новый пароль ещё раз</label><input class="input" id="cp-2" type="password" minlength="6" autocomplete="new-password" required></div>
+    <p class="small muted">После смены пароля все другие устройства, где вы были в панели, попросят вход заново.</p>
+    <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сменить</button></div></form></div>`;
+  /* Важные контакты: добавление/редактирование */
+  if (m.type==='contact') return contactModal(m);
   if (m.type==='confirm') return `<div class="overlay" data-act="close-bg"><div class="modal" style="max-width:440px"><h3>${esc(m.title)}</h3><p class="muted">${esc(m.text)}</p>
     <div class="modal-f"><button class="btn" data-act="close">Отмена</button><button class="btn primary" data-act="confirm-yes" style="background:var(--st-over);border-color:var(--st-over);color:#fff">${esc(m.yes||'Удалить')}</button></div></div></div>`;
   if (m.type==='confirm-chain') {
@@ -2166,6 +2360,24 @@ function renderModal(){
 }
 
 const dayChips = (name, days) => `<div class="chips" id="${name}">${[1,2,3,4,5,6,0].map(d=>`<label class="chip${days.includes(d)?' on':''}"><input type="checkbox" value="${d}"${days.includes(d)?' checked':''} hidden>${DOW[d]}</label>`).join('')}</div>`;
+/* Модалка контакта: категория задаётся чипами, для «услуг» — свободный тип (визитки, чай…) с подсказкой из уже введённых */
+function contactModal(m){
+  const c = m.c || { cat:'vendor', type:'', name:'', phone:'', tg:'', email:'', note:'' };
+  return `<div class="overlay" data-act="close-bg"><form class="modal" id="contact-form" data-id="${esc(c.id||'')}" style="max-width:540px">
+    <div class="modal-h"><h3>${c.id ? 'Изменить контакт' : 'Новый контакт'}</h3>${closeX}</div>
+    <div class="field"><span class="small muted" style="font-weight:600">Категория</span><div class="chips" id="cf-cat">
+      ${Object.entries(CONTACT_CATS).map(([k,v]) => `<label class="chip${c.cat===k?' on':''}"><input type="radio" name="cf-cat" value="${k}"${c.cat===k?' checked':''} hidden>${v}</label>`).join('')}</div></div>
+    <div class="field"><label for="cf-name">Название или имя *</label><input class="input" id="cf-name" required maxlength="120" value="${esc(c.name)}" placeholder="Типография «ПринтШоп», Ирина — хатха-йога…"></div>
+    <div class="field"><label for="cf-type">Тип / чем занимается</label><input class="input" id="cf-type" maxlength="60" value="${esc(c.type)}" placeholder="Визитки, чай, уборка, фотограф…" list="cf-types">
+      <datalist id="cf-types">${[...new Set((S.data.contacts||[]).filter(x => x.cat==='vendor').map(x => x.type).filter(Boolean))].map(t => `<option value="${esc(t)}">`).join('')}</datalist></div>
+    <div class="grid3">
+      <div class="field"><label for="cf-phone">Телефон</label><input class="input" id="cf-phone" type="tel" maxlength="30" value="${esc(c.phone)}" placeholder="+7 900 123-45-67"></div>
+      <div class="field"><label for="cf-tg">Telegram</label><input class="input" id="cf-tg" maxlength="60" value="${esc(c.tg)}" placeholder="@username"></div>
+      <div class="field"><label for="cf-email">Почта</label><input class="input" id="cf-email" type="email" maxlength="120" value="${esc(c.email)}" placeholder="name@mail.ru"></div></div>
+    <div class="field"><label for="cf-note">Заметка</label><textarea class="input" id="cf-note" maxlength="500" rows="2" placeholder="Условия, сроки, скидки, с кем говорить…">${esc(c.note)}</textarea></div>
+    <div class="modal-f">${c.id ? `<button type="button" class="btn danger" data-act="contact-del" data-id="${esc(c.id)}">Удалить</button>` : ''}<span class="spacer"></span>
+      <button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
+}
 const peopleOptions = (cur, emptyLabel, onlySmm) => `<option value="">${emptyLabel}</option>` + S.data.users.filter(u => u.active && u.status==='active' && (!onlySmm || hasRole(u,'smm')))
   .map(u => `<option value="${u.id}"${cur===u.id?' selected':''}>${esc(u.name)} · ${rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')}</option>`).join('');
 const parentCandidates = t => S.data.tasks.filter(x => x.id!==t.id && !x.parentId && !x.recurringId && isOpen(x) && !(t.id && x.parentId===t.id))
@@ -3014,11 +3226,13 @@ function notifySetModal(){
     <div class="field"><span class="small muted" style="font-weight:600">Отдельные нерабочие дни (отпуск, отгул)</span>
       <div class="chips" id="nt-dates">${(st.offDates||[]).slice().sort().map(d => `<span class="tag">${fmtDay(d)} <button type="button" class="btn ghost sm" style="min-height:0;padding:0 4px" data-act="nt-date-del" data-d="${d}" aria-label="Убрать">✕</button></span>`).join('') || '<span class="small muted">не выбраны</span>'}</div>
       <div class="toolbar"><input class="input pill" type="date" id="nt-newdate" min="${todayStr()}" aria-label="Нерабочий день"><button type="button" class="btn sm" data-act="nt-date-add">Добавить день</button></div></div>
+    <div class="toolbar" style="margin-top:2px"><button type="button" class="btn sm" data-act="my-pass">Сменить мой пароль</button><span class="spacer"></span><span class="small muted">Панель ${BUILD_NAME} · сервер ${S.data.build ? 'v'+S.data.build : '—'}</span></div>
     <div class="modal-f"><button type="button" class="btn ghost" data-act="nt-test">Проверить уведомление</button><span class="spacer"></span><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
 }
 /* Всплывающее уведомление внутри панели (так выглядит пуш на телефоне) */
 const shownPush = new Set();
 function showPush(n){
+  if (!app) return;   // защиты от запуска вне страницы (автотесты в node)
   app.querySelector('.push')?.remove();
   const el = document.createElement('button'); el.className = 'push'; el.type = 'button';
   el.innerHTML = `<span class="app-ic sm" aria-hidden="true">${ICON_LOTUS}</span><span class="tx"><span class="small muted">SUKHA PRANA · сейчас</span><b>${esc(n.title)}</b><span>${esc(n.text)}</span></span>`;
@@ -3251,6 +3465,7 @@ function handleCsvFile(file, preview) {
 /* ---------- 9. СОБЫТИЯ ---------- */
 let toastTimer;
 function toast(msg, isErr){
+  if (!app) return;   // страница ещё не готова (автотесты в node) — просто пропускаем сообщение
   app.querySelector('.toast')?.remove(); clearTimeout(toastTimer);
   const el = document.createElement('div'); el.className = 'toast'+(isErr?' err':''); el.textContent = msg; el.setAttribute('role','status'); app.appendChild(el);
   toastTimer = setTimeout(() => el.remove(), isErr ? 4200 : 2200);
@@ -3415,6 +3630,16 @@ root.addEventListener('click', e => {
     case 'reject': S.modal = { type:'confirm', title:'Отклонить заявку?', text:`${userById(id)?.fullName||''} не сможет войти в панель.`, yes:'Отклонить', on: async () => { const r = await Api.call('rejectUser', { id }); replaceIn(S.data.users, r.user); S.data.notifications = r.notifications; toast('Заявка отклонена'); } }; render(); break;
     case 'toggle-user': run(async () => { const u = userById(id); const r = await Api.call('saveUser', { user:{ id, active:!u.active } }); replaceIn(S.data.users, r); render(); }, 'Доступ изменён'); break;
     case 'pass': S.modal = { type:'pass', id }; render(); document.getElementById('pw-1')?.focus(); break;
+    /* ---------- Важные контакты ---------- */
+    case 'contact-edit': { const c = id ? (S.data.contacts||[]).find(x => x.id===id) : null; S.modal = { type:'contact', c: c ? JSON.parse(JSON.stringify(c)) : null }; render(); document.getElementById('cf-name')?.focus(); break; }
+    case 'contact-del': { const c = (S.data.contacts||[]).find(x => x.id===id); if (!c) break;
+      S.modal = { type:'confirm', title:'Удалить контакт?', text:`«${c.name}» будет убран из важных контактов.`, yes:'Удалить',
+        on: async () => { const r = await Api.call('deleteContact', { id }); S.data.contacts = r.contacts; S.modal = null; render(); } };
+      render(); break; }
+    /* ---------- Профиль: смена своего пароля ---------- */
+    case 'my-pass': S.modal = { type:'changepass' }; render(); document.getElementById('cp-0')?.focus(); break;
+    /* Баннер «Доступна новая версия» */
+    case 'upd-reload': location.reload(); break;
     case 'user-edit': S.modal = { type:'user', id }; render(); break;
     case 'trainer-edit': S.modal = { type:'trainer', id }; render(); document.getElementById('trf-n')?.focus(); break;
     /* продажи и зарплата */
@@ -3553,6 +3778,7 @@ root.addEventListener('input', e => {
   if (r.dataset.gstep!=null && S.guideDraft){ S.guideDraft.steps[Number(r.dataset.gstep)].t = r.value; return; }
   if (r.id==='gf-t' && S.guideDraft){ S.guideDraft.title = r.value; return; }
   if (r.id==='f-guide'){ S.guideQuery = r.value; const pos = r.selectionStart; render(); const n = document.getElementById('f-guide'); n.focus(); n.setSelectionRange(pos,pos); return; }
+  if (r.id==='f-contacts'){ S.contactQuery = r.value; const pos = r.selectionStart; render(); const n = document.getElementById('f-contacts'); n.focus(); n.setSelectionRange(pos,pos); return; }
   if (r.dataset.clp){ root.querySelectorAll(`output[id^="clp-${CSS.escape(r.dataset.item)}"]`).forEach(o => o.textContent = r.value+'%'); paintRange(r); return; }
   if (r.dataset.cl){ const t = S.data.tasks.find(x => x.id===r.dataset.cl); const n = t.checklist.length; const v = Number(r.value);
     if (Rules.isLockedFor(S.user,t) && v < t.checklist.filter(x=>x.done).length){ r.value = t.checklist.filter(x=>x.done).length; }
@@ -3676,6 +3902,28 @@ root.addEventListener('submit', e => {
     Auth.login(v('lg-login'), v('lg-pass')).catch(err => { const box = document.getElementById('lg-err'); if (box) box.textContent = err.message; btn.disabled=false; btn.textContent='Войти'; });
     return;
   }
+  /* --- Восстановление пароля, шаг 1: просим код --- */
+  if (f.id==='forgot-form'){
+    const box = document.getElementById('fg-err'); const btn = document.getElementById('fg-btn'); btn.disabled = true; btn.textContent = 'Отправляем…';
+    Api.call('requestReset', { login:v('fg-login') }).then(r => {
+      S.resetLogin = v('fg-login'); S.authMode = 'forgot2';
+      S.resetMsg = r.sent
+        ? 'Код отправлен' + (r.via ? ' через ' + r.via : '') + '. Если он не пришёл за пару минут — проверьте папку «Спам» или попросите владельца задать новый пароль.'
+        : 'К этому аккаунту не подключены Telegram или почта — отправить код некуда. Попросите владельца задать вам новый пароль: панель → «Команда» → «Пароль».';
+      S.resetDemo = r.demoCode || '';
+      render();
+    }).catch(err => { box.textContent = err.message; btn.disabled = false; btn.textContent = 'Отправить код'; });
+    return;
+  }
+  /* --- Восстановление пароля, шаг 2: код + новый пароль --- */
+  if (f.id==='forgot2-form'){
+    const box = document.getElementById('fg2-err'); const btn = document.getElementById('fg2-btn'); btn.disabled = true; btn.textContent = 'Меняем…';
+    Api.call('confirmReset', { login:v('fg2-login'), code:v('fg2-code').trim(), pass:v('fg2-p1') }).then(() => {
+      S.authMode = 'login'; const was = S.resetLogin; S.resetLogin = ''; S.resetMsg = ''; S.resetDemo = ''; render();
+      const inp = document.getElementById('lg-login'); if (inp){ inp.value = was; } toast('Пароль изменён — войдите с новым.');
+    }).catch(err => { box.textContent = err.message; btn.disabled = false; btn.textContent = 'Сменить пароль'; });
+    return;
+  }
   if (f.id==='reg-form'){
     const box = document.getElementById('rg-err');
     if (v('rg-p1') !== v('rg-p2')){ box.textContent = 'Пароли не совпадают.'; return; }
@@ -3774,6 +4022,22 @@ root.addEventListener('submit', e => {
     run(async () => { await Api.call('saveUser', { user:{ id:f.dataset.id, pass:p } }); S.modal=null; render(); }, 'Пароль изменён');
     return;
   }
+  /* --- Профиль: смена своего пароля --- */
+  if (f.id==='changepass-form'){
+    const p1 = v('cp-1'), p2 = v('cp-2');
+    if (p1 !== p2){ toast('Новые пароли не совпадают.', true); return; }
+    run(async () => { const r = await Api.call('changeMyPass', { oldPass:v('cp-0'), newPass:p1 });
+      if (r.token){ Api.token = r.token; tokenStore.set('sp_token', r.token); }   // токен перезличён: другие сеансы закрыты
+      S.modal = null; render(); }, 'Пароль изменён');
+    return;
+  }
+  /* --- Важные контакты --- */
+  if (f.id==='contact-form'){
+    const cat = document.querySelector('input[name="cf-cat"]:checked')?.value || 'vendor';
+    run(async () => { const r = await Api.call('saveContact', { contact:{ id:f.dataset.id || undefined, cat, name:v('cf-name'), type:v('cf-type'), phone:v('cf-phone'), tg:v('cf-tg'), email:v('cf-email'), note:v('cf-note') } });
+      S.data.contacts = r.contacts; S.modal = null; render(); }, 'Контакт сохранён');
+    return;
+  }
   /* --- Шаблоны зарплаты: сохранение пресета ставки --- */
   if (f.id==='preset-form'){
     const kind = f.dataset.kind, id = f.dataset.id;
@@ -3852,7 +4116,13 @@ async function refreshData(){
 }
 if (CONFIG.MODE==='gas'){
   setInterval(refreshData, Math.max(20, CONFIG.REFRESH_SEC||60) * 1000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible') refreshData(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState==='visible'){
+      refreshData();
+      /* Заодно проверяем фонового помощника (sw.js): если на хостинге новая версия — он обновится сам */
+      if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+    }
+  });
 }
 
 /* Пуш-уведомления на телефон (Firebase Cloud Messaging).
@@ -3890,7 +4160,7 @@ const Push = {
    Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
 if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
   S, Api, Auth, loadAll, render, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
-  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin },
+  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin },
   modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal() },
   parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
   demo: (action, payload) => Api.call(action, payload)

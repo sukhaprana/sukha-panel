@@ -610,3 +610,15 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .btn.danger:hover{filter:brightness(.95)}
 #sp-app details summary{cursor:pointer;user-select:none}
 
+
+/* ═══ Важные контакты (раздел «База») ═══ */
+#sp-app .ct-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+#sp-app .ct-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;flex-direction:column;gap:3px;box-shadow:var(--shadow);min-width:0}
+#sp-app .ct-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#sp-app .ct-head b{min-width:0;overflow-wrap:anywhere}
+#sp-app .ct-sub{font-weight:700;font-size:13px;margin:12px 0 6px;color:var(--ink)}
+#sp-app .ct-card .toolbar{margin-top:6px}
+
+/* Баннер «Доступна новая версия панели» (нейтральный лавандовый, не как тревожный красный) */
+#sp-app .banner.upd{background:var(--lav-soft);border-color:var(--lav);color:var(--ink)}
+#sp-app .banner.upd b{color:var(--ink)}
