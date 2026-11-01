@@ -23,8 +23,8 @@
 /* ВЕРСИЯ СБОРКИ ПАНЕЛИ. Показывается на экране входа и в профиле; сервер сверяет её
    при каждом обновлении данных (bootstrap.build) и подсказывает, какая из сторон устарела.
    При публикации новой версии: увеличьте BUILD здесь, CORE_BUILD (общий с сервером) и ?v=… в index.html. */
-const BUILD = 3;
-const BUILD_NAME = 'v3 · 1 ноября 2026';
+const BUILD = 5;
+const BUILD_NAME = 'v5 · 2 ноября 2026';
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 1 · НАСТРОЙКИ (CONFIG)
@@ -56,7 +56,7 @@ const CONFIG = Object.assign({
 /*@CORE-START — отсюда и до @CORE-END код общий для браузера и Google Apps Script */
 /* Версия данных/протокола: панель и сервер сверяют её, чтобы подсказать, что нужно обновить.
    panel.js BUILD == Code.gs CORE_BUILD в одной поставке. */
-const CORE_BUILD = 3;
+const CORE_BUILD = 5;
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 2 · УТИЛИТЫ
    Что делает:   даты, деньги, экранирование текста — мелкие помощники для всего кода.
@@ -93,10 +93,11 @@ const weekStart = s => { const d = parseYmd(s); const k = (d.getDay()+6)%7; d.se
 /* ---------- 3. ПРАВИЛА ---------- */
 /* Аватары-зверята: выбор в профиле */
 const AVATARS = ['🦊','🐼','🐨','🦁','🐯','🐸','🐙','🦉','🦄','🐢','🐬','🐝','🦋','🐧','🐰','🐱','🐶','🦔','🦥','🦦','🐳','🐞','🦩','🐿️','🦘','🐹','🦭','🐻','🐮','🐷'];
-const ROLES = { owner:'Владелец', manager:'Управляющий', admin:'Администратор', smm:'СММ' };
+const ROLES = { owner:'Владелец', manager:'Управляющий', admin:'Администратор', smm:'СММ', trainer:'Тренер' };
 const LEVELS = { owners:'Собственники', management:'Управление', team:'Команда', smm:'СММ' };
-/* Какие разделы задач видит роль. СММ не видит ничьих задач, кроме своих (он в них ответственный или помощник) */
-const ROLE_LEVELS = { owner:['owners','management','team','smm'], manager:['management','team','smm'], admin:['team'], smm:[] };
+/* Какие разделы задач видит роль. СММ не видит ничьих задач, кроме своих (он в них ответственный или помощник).
+   «Тренер» — только совмещаемая роль: сотрудник с ней видит раздел «Команда» и попадает в категорию «Тренеры» в «Продажах и зарплате». */
+const ROLE_LEVELS = { owner:['owners','management','team','smm'], manager:['management','team','smm'], admin:['team'], smm:[], trainer:['team'] };
 const STATUS = { todo:'Не начато', work:'В работе', wait:'Ждёт решения', done:'Готово', cancel:'Отменено', over:'Просрочено' };
 const PRIO = { urgent:'Срочно', high:'Высокий', mid:'Средний', low:'Низкий' };
 const PRIO_W = { urgent:4, high:3, mid:2, low:1 };
@@ -186,9 +187,12 @@ const RATE_MODES_SMM = { fixed:'фикс в месяц', perPost:'за публ�
 const PAY_KINDS = { tr:{ title:'Тренеры', unit:'занятий', rates:'trainers', modes:RATE_MODES_TRAINER }, mgr:{ title:'Управляющий', unit:'', rates:'manager', modes:RATE_MODES_MANAGER }, smm:{ title:'СММ', unit:'публикаций', rates:'smm', modes:RATE_MODES_SMM } };
 const RATE_MODES_ADMIN = { contract:'по договору: смены + % + KPI', shift:'только фикс за смену', fixed:'фикс в месяц' };
 const payoutMonth = p => (p.periodFrom || p.plannedDate || p.createdAt || '').slice(0,7);
-/* Настройки уведомлений по умолчанию — у каждого свои */
+/* Настройки уведомлений по умолчанию — у каждого свои.
+   shiftRemindMin — за сколько минут до начала смены напомнить (0 — выключено);
+   shiftEveAt — в какое время накануне напомнить о завтрашней смене ('' — выключено). */
 function defaultNotify(role){
   return { push:true, telegram:false, tgChat:'', remindMin:60, quietFrom:'22:00', quietTo:'08:00', offDays:[], offDates:[], onlyShifts: role==='admin',
+    shiftRemindMin:60, shiftEveAt:'19:00',
     types:{ assigned:true, deadline:true, overdue:true, comments:true, schedule:true, report:true, signup: role==='owner', payout:true } };
 }
 const RECEIPT_PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360" viewBox="0 0 240 360"><rect width="240" height="360" fill="#fffdf6"/><g fill="#9a9a9a" font-family="monospace" font-size="13"><text x="24" y="40">SUKHA PRANA</text><text x="24" y="64">КАССОВЫЙ ЧЕК</text><text x="24" y="100">Отчёт о закрытии смены</text><text x="24" y="130">Безнал ......... 25960</text><text x="24" y="152">Наличные ........... 0</text><text x="24" y="190">ИТОГ ........... 25960</text><text x="24" y="320">(пример фото чека)</text></g><path d="M24 210h192M24 220h150M24 230h170M24 240h120" stroke="#ccc" stroke-width="4"/></svg>');
@@ -988,11 +992,30 @@ function createServer(opts){
       if (user.active===false && old.id===u.id) err('Нельзя отключить свою собственную учётную запись.');
       if (old.role==='owner' && ((user.role && user.role!=='owner') || user.active===false) && owners.length<=1) err('Нельзя убрать последнего владельца.');
       if (user.role && !ROLES[user.role]) err('Неизвестная роль.','VALIDATION');
-      if (user.extraRoles) user.extraRoles = user.extraRoles.filter(r => ROLES[r]);
+      if (user.extraRoles) user.extraRoles = [...new Set(user.extraRoles.filter(r => ROLES[r]))].slice(0,4);
       const { pass:newPass, ...rest } = user;
-      if (newPass && String(newPass).length < 4) err('Пароль — минимум 4 символа.','VALIDATION');
-      const next = { ...old, ...rest }; if (newPass) setPass(next, newPass);
+      if (newPass && String(newPass).length < 6) err('Пароль — минимум 6 символов.','VALIDATION');
+      /* Безопасность: берём только разрешённые поля — служебные (salt, passHash, notify и т.п.) через сохранение сотрудника не меняются.
+         Статус заявки меняется только через approveUser/rejectUser, где чистятся уведомления. */
+      const ALLOWED_USER_FIELDS = ['fullName','phone','email','login','role','extraRoles','active','color','avatar'];
+      const clean = {}; ALLOWED_USER_FIELDS.forEach(k => { if (k in rest) clean[k] = rest[k]; });
+      const next = { ...old, ...clean }; if (newPass) setPass(next, newPass);
       if (user.fullName) next.name = shortName(user.fullName);
+      /* Совмещение «тренер»: держим связанную запись в списке тренеров, чтобы человек считался в категории «Тренеры»
+         (ставки и выплаты за занятия идут по id этой записи и не теряются при снятии/возврате совмещения) */
+      const wantTr = rolesOf(next).includes('trainer');
+      const norm = s => String(s||'').trim().replace(/\s+/g,' ').toLowerCase();
+      let linked = db.trainers.filter(t => t.userId===next.id);
+      if (wantTr){
+        if (!linked.length){
+          const byName = db.trainers.find(t => !t.userId && norm(t.fullName)===norm(next.fullName));
+          if (byName){ byName.userId = next.id; linked = [byName]; }
+          else { const rec = { id:uid('tr'), userId:next.id, fullName:next.fullName, name:shortName(next.fullName), phone:next.phone||'', note:'сотрудник студии', active:true }; db.trainers.push(rec); linked = [rec]; }
+        }
+        linked.forEach(t => { t.fullName = next.fullName; t.name = shortName(next.fullName); t.active = next.active!==false && next.status==='active'; });
+      } else {
+        linked.forEach(t => { t.active = false; }); /* сняли совмещение — из «Тренеров» человек уходит, история начислений остаётся */
+      }
       db.users[i] = next; save(); return pubUser(next, true);
     },
     approveUser({ id, role }, u){
@@ -1011,12 +1034,16 @@ function createServer(opts){
     saveTrainer({ t }, u){
       if (!Rules.canManageTeam(u)) err('Только владелец.');
       if (!t.fullName || !t.fullName.trim()) err('Укажите ФИО тренера.','VALIDATION');
-      const rec = upsert(db.trainers, { active:true, phone:'', note:'', ...t, id: t.id || uid('tr'), name:t.fullName.trim(), fullName:t.fullName.trim() });
+      /* сохраняем связь с сотрудником (совмещение «тренер»), если она есть */
+      const prev = db.trainers.find(x => x.id===t.id);
+      const rec = upsert(db.trainers, { active:true, phone:'', note:'', ...(prev?.userId ? { userId: prev.userId } : {}), ...t, id: t.id || uid('tr'), name:t.fullName.trim(), fullName:t.fullName.trim() });
       save(); return rec;
     },
     /* График: заменить все смены на дату (редактируют управляющий и владельцы) */
     saveShifts({ date, shifts }, u){
       if (!Rules.canEditSchedule(u)) err('Менять график могут управляющий и владельцы.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date||'')) err('Неверная дата.','VALIDATION');
+      if (!Array.isArray(shifts) || shifts.length > 4) err('Смен в одном дне не может быть больше четырёх.','VALIDATION');
       const tm = /^\d{2}:\d{2}$/;
       const list = (shifts||[]).map(x => {
         const a = db.users.find(y => y.id===x.adminId); if (!a || !a.active || a.status!=='active' || !rolesOf(a).length) err('Выберите сотрудника на смену.','VALIDATION');
@@ -1042,6 +1069,8 @@ function createServer(opts){
       const onShift = db.schedule.some(x => x.date===r.date && x.adminId===u.id);
       if (!onShift && !isOwner(u)) err('Отчёт за этот день может сдать только администратор, который работает в эту смену по графику.');
       if (!r.photo) err('Прикрепите фото чека — без него отчёт не сохранится.','VALIDATION');
+      /* Безопасность: фото — только встроенное изображение, никаких посторонних данных */
+      if (!/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);(?:base64|utf8),/i.test(r.photo)) err('Формат фото не поддерживается. Нужен JPG или PNG.','VALIDATION');
       const fields = db.settings.reportFields || DEFAULT_REPORT_FIELDS; const values = {};
       fields.forEach(f => { const v = (r.values||{})[f.k]; values[f.k] = f.type==='text' ? String(v||'').slice(0,300) : Math.max(0, Math.round(Number(v)||0)); });
       const dayTasks = db.tasks.filter(t => t.due===r.date && t.level==='team' && t.status!=='cancel');
@@ -1210,14 +1239,37 @@ function createServer(opts){
       setPass(nu, user.pass); db.users.push(nu); save(); return pubUser(nu, true);
     },
     saveNotify({ notify }, u){
-      const x = db.users.find(y => y.id===u.id); const { tgChatId, ...clean } = notify || {}; const prev = x.notify || {};
-      x.notify = { ...defaultNotify(x.role), ...prev, ...clean };
-      if ('tgChat' in clean && String(clean.tgChat||'').replace('@','').toLowerCase() !== String(prev.tgChat||'').replace('@','').toLowerCase()) delete x.notify.tgChatId;
+      const x = db.users.find(y => y.id===u.id); const prev = x.notify || {};
+      /* Безопасность: белый список полей + нормализация; не указанные поля сохраняют прежние значения
+         (кнопки вроде «добавить нерабочий день» присылают частичные настройки) */
+      const src = notify && typeof notify==='object' ? notify : {};
+      const base = { ...defaultNotify(x.role), ...prev };
+      const hhmm = v => /^\d{2}:\d{2}$/.test(String(v||'')) ? String(v) : null;
+      const num = (v, def, min, max) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : def; };
+      const clean = { ...base };
+      if ('push' in src) clean.push = !!src.push;
+      if ('telegram' in src) clean.telegram = !!src.telegram;
+      if ('remindMin' in src) clean.remindMin = num(src.remindMin, base.remindMin, 5, 1440);
+      if ('shiftRemindMin' in src) clean.shiftRemindMin = num(src.shiftRemindMin, base.shiftRemindMin ?? 60, 0, 720);
+      if ('shiftEveAt' in src) clean.shiftEveAt = src.shiftEveAt === '' ? '' : (hhmm(src.shiftEveAt) || base.shiftEveAt || '19:00');
+      if ('quietFrom' in src) clean.quietFrom = hhmm(src.quietFrom) || '22:00';
+      if ('quietTo' in src) clean.quietTo = hhmm(src.quietTo) || '08:00';
+      if ('offDays' in src) clean.offDays = [...new Set((Array.isArray(src.offDays) ? src.offDays : []).map(Number).filter(d => d>=0 && d<=6))].slice(0,7);
+      if ('offDates' in src) clean.offDates = [...new Set((Array.isArray(src.offDates) ? src.offDates : []).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))).map(String))].slice(0,60);
+      if ('onlyShifts' in src) clean.onlyShifts = !!src.onlyShifts;
+      if ('tgChat' in src) clean.tgChat = String(src.tgChat||'').slice(0,60);
+      if (src.types && typeof src.types==='object'){ const ty = { ...base.types }; ['assigned','deadline','overdue','comments','schedule','report','signup','payout'].forEach(k => { if (k in src.types) ty[k] = !!src.types[k]; }); clean.types = ty; }
+      x.notify = clean;
+      if ('tgChat' in src && String(clean.tgChat||'').replace('@','').toLowerCase() !== String(prev.tgChat||'').replace('@','').toLowerCase()) delete x.notify.tgChatId;
       save(); return x.notify;
     },
     saveSettings({ settings }, u){
       if (!Rules.canManageTeam(u)) err('Только владелец.');
-      db.settings = { ...db.settings, ...settings }; save(); return db.settings;
+      /* Безопасность: только известные ключи настроек */
+      const src = settings && typeof settings==='object' ? settings : {};
+      const ALLOWED_SETTINGS = ['shiftRates','reportFields','yandexOrgId','twogisFirmId','twogisCity'];
+      const clean = {}; ALLOWED_SETTINGS.forEach(k => { if (k in src) clean[k] = src[k]; });
+      db.settings = { ...db.settings, ...clean }; save(); return db.settings;
     },
     /* --- Продажи и зарплата админов --- */
     saveSale({ s }, u){
@@ -1243,7 +1295,9 @@ function createServer(opts){
         const cleanClient = sanitize(ord.client);
         const cleanComment = sanitize(ord.comment);
         const price = Number(ord.netAmount);
-        if (!(price > 0) || ord.isRefund) { skipped++; return; }
+        /* Частичный возврат (вернули меньше, чем сумма продажи) — импортируем за вычетом возврата;
+           полный возврат и бесплатные строки дают netAmount 0 и отсеиваются здесь же. */
+        if (!(price > 0)) { skipped++; return; }
         const date = /^\d{4}-\d{2}-\d{2}$/.test(ord.date) ? ord.date : todayStr();
         const product = PRODUCT[ord.productKey] ? ord.productKey : 'other';
         /* Ключ дедупликации должен совпадать с той заметкой, которая реально сохранится (иначе повторный импорт плодит копии) */
@@ -1643,6 +1697,9 @@ function switchTab(targetView){
     }
     root.querySelectorAll('input[type=range].rng').forEach(paintRange);
     if (S.view === 'fin') bindCsvImport();
+    /* Синхронизируем кеш отрисовки: иначе ближайшая плановая перерисовка (раз в минуту)
+       заново перестроила бы всю страницу и «моргнула» после каждого переключения вкладки */
+    S._lastHtml = buildAppHtml();
     window.scrollTo({ top: 0, behavior: 'instant' });
     return;
   }
@@ -1654,16 +1711,15 @@ function switchTab(targetView){
   window.scrollTo({ top: 0 });
 }
 
-function render(){
-  if (!S.user && S.bootError && Api.token){ root.innerHTML = `<div class="login"><div class="card" style="max-width:420px;margin:60px auto;text-align:center"><h3>Нет связи с сервером</h3>
-    <p class="muted">${esc(S.bootError)}</p><div class="toolbar" style="justify-content:center"><button class="btn primary" data-act="boot-retry">Повторить</button><button class="btn ghost" data-act="logout">Войти заново</button></div></div></div>`; return; }
-  if (!S.user){ root.innerHTML = viewLogin(); return; }
+/* Полный HTML приложения из текущего состояния — чистая функция, DOM не трогает.
+   Нужна, чтобы сравнивать: если ничего не изменилось, перерисовку пропускаем (не моргает). */
+function buildAppHtml(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
   const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
   const unread = unreadCount();
-  root.innerHTML = `
+  return `
     <header class="top">
       <div class="brand"><div class="mark">${ICON_LOTUS}</div><div><div class="brand-name">Sukha Prana</div><div class="brand-sub">Панель команды студии</div></div></div>
       <div class="who">
@@ -1681,6 +1737,22 @@ function render(){
     <main>${views[S.view]()}</main>
     ${bottomNav(tabs)}
     ${S.modal ? (S.modal.type==='more' ? moreSheet() : renderModal()) : ''}`;
+}
+
+function render(){
+  if (!S.user && S.bootError && Api.token){ S._lastHtml = ''; root.innerHTML = `<div class="login"><div class="card" style="max-width:420px;margin:60px auto;text-align:center"><h3>Нет связи с сервером</h3>
+    <p class="muted">${esc(S.bootError)}</p><div class="toolbar" style="justify-content:center"><button class="btn primary" data-act="boot-retry">Повторить</button><button class="btn ghost" data-act="logout">Войти заново</button></div></div></div>`; return; }
+  if (!S.user){ S._lastHtml = ''; root.innerHTML = viewLogin(); return; }
+  const html = buildAppHtml();
+  /* Анти-моргание: если содержимое не изменилось, DOM не перестраиваем —
+     не сбрасываются раскрытые списки, выделение текста и положение страницы */
+  if (html === S._lastHtml) return;
+  S._lastHtml = html;
+  const keep = [...root.querySelectorAll('.push, .toast')];   // живые всплывающие уведомления переживают перерисовку
+  const scY = window.scrollY;
+  root.innerHTML = html;
+  keep.forEach(el => root.appendChild(el));
+  if (scY > 0) window.scrollTo(0, Math.min(scY, document.body?.scrollHeight || 1e9));
   root.querySelectorAll('input[type=range].rng').forEach(paintRange);
   if (S.view === 'fin') bindCsvImport();
 }
@@ -2021,7 +2093,7 @@ function viewStats(){
 function viewPay(){
   const owner = Rules.seeAmounts(S.user);
   const recips = [...S.data.users.filter(u => u.active && u.status==='active').map(u => ({ id:u.id, label:`${u.name} · ${rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')}` })),
-    ...(S.data.trainers||[]).filter(t => t.active).map(t => ({ id:t.id, label:`${t.fullName} · тренер` }))];
+    ...(S.data.trainers||[]).filter(t => t.active).map(t => ({ id:t.id, label:`${t.fullName} · тренер${t.userId ? ' (за занятия)' : ''}` }))];
   const inMonth = p => payoutMonth(p)===S.payMonth;
   const mStart = S.payMonth+'-01', mEnd = ymd(new Date(Number(S.payMonth.slice(0,4)), Number(S.payMonth.slice(5)), 0));
   const list = S.data.payouts.filter(inMonth).filter(p => !isPureSmm(S.user) || p.recipient===S.user.id).sort((a,b) => (!!a.issuedAt - !!b.issuedAt) || (b.plannedDate||'').localeCompare(a.plannedDate||''));
@@ -2231,7 +2303,7 @@ function viewTeam(){
       ${staff.map(u => `<tr><td><span style="display:inline-flex;gap:8px;align-items:center">${ava(u.id,true)}<span><b>${esc(u.fullName||u.name)}</b><div class="small muted">в панели: ${esc(u.name)}</div></span></span></td>
         <td class="small">${esc(u.phone||'—')}<br>${esc(u.email||u.login||'—')}</td>
         <td><select class="input pill" data-act="role" data-id="${u.id}" aria-label="Роль ${esc(u.name)}"${u.id===S.user.id?' disabled title="Свою роль поменяет другой владелец"':''}>${Object.entries(ROLES).map(([k,v])=>`<option value="${k}"${u.role===k?' selected':''}>${v}</option>`).join('')}</select>
-          <div class="chips xs-wrap">${['admin','manager','smm'].filter(r => r!==u.role).map(r => { const on = (u.extraRoles||[]).includes(r); return `<button class="chip xs${on?' on':''}" data-act="extra-role" data-id="${u.id}" data-r="${r}" title="Совмещает должности">${on?'✓ ':'+ '}${ROLES[r].toLowerCase()}</button>`; }).join('')}</div></td>
+          <div class="chips xs-wrap">${['admin','manager','smm','trainer'].filter(r => r!==u.role).map(r => { const on = (u.extraRoles||[]).includes(r); return `<button class="chip xs${on?' on':''}" data-act="extra-role" data-id="${u.id}" data-r="${r}" title="Совмещает должности — сотрудник появится в этой категории «Продаж и зарплаты»">${on?'✓ ':'+ '}${ROLES[r].toLowerCase()}</button>`; }).join('')}</div></td>
         <td><button class="btn sm" data-act="toggle-user" data-id="${u.id}"${u.id===S.user.id?' disabled':''}>Отключить</button></td>
         <td style="white-space:nowrap"><button class="btn sm ghost" data-act="user-edit" data-id="${u.id}">Изменить</button><button class="btn sm ghost" data-act="pass" data-id="${u.id}">Пароль</button></td></tr>`).join('')}
       </tbody></table></div>
@@ -2660,8 +2732,20 @@ function payAccrual(M, key){
   const calc = base + bonus; const manual = isEmpty(rec.manual) ? null : Number(rec.manual);
   return { key, kind, id, rate:r, units, bonus, calc, manual, sum: manual ?? calc, revenue };
 }
+/* Кто показывается в начислениях категории. Совмещение: сотрудник с ролью «тренер» попадает и в «Тренеры» —
+   по id связанной записи тренера, чтобы ставки и выплаты не терялись. */
+const trainerLinkOf = u => (S.data.trainers||[]).find(t => t.userId===u?.id && t.active) || null;
 function payPeople(kind){
-  if (kind==='tr') return (S.data.trainers||[]).filter(t => t.active).map(t => ({ id:t.id, name:t.fullName, sub:t.note||'' }));
+  if (kind==='tr'){
+    const staffTrainers = activeStaff().filter(u => hasRole(u,'trainer')).map(u => {
+      const link = trainerLinkOf(u);
+      return { id: link ? link.id : u.id, name:u.fullName||u.name,
+        sub: rolesOf(u).length>1 ? 'совмещает: '+rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')+' — занятия считаются здесь' : 'сотрудник · тренер' };
+    });
+    const linkedIds = new Set(staffTrainers.map(p => p.id));
+    const outer = (S.data.trainers||[]).filter(t => t.active && !(t.userId && userById(t.userId))).map(t => ({ id:t.id, name:t.fullName, sub:t.note||'' }));
+    return [...staffTrainers, ...outer.filter(p => !linkedIds.has(p.id))];
+  }
   if (kind==='mgr') return activeStaff().filter(u => isManager(u) && !isOwner(u)).map(u => ({ id:u.id, name:u.fullName||u.name, sub:rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ') }));
   return activeStaff().filter(u => hasRole(u,'smm')).map(u => ({ id:u.id, name:u.fullName||u.name, sub: rolesOf(u).length>1 ? 'совмещает: '+rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')+' — СММ оплачивается отдельно' : 'СММ' }));
 }
@@ -2674,10 +2758,11 @@ const PRESET_KINDS = { staff:{ title:'Администраторы', modes:RATE_
 const presetsOf = kind => (S.data.ratePresets||[]).filter(p => p.kind===kind);
 const presetDesc = p => { const K = PRESET_KINDS[p.kind]||{}; const m = (K.modes||{})[p.rate?.mode] || (p.rate?.mode||'');
   return `${m}${p.rate?.amount ? ` · ${money(p.rate.amount)}` : ''}${p.kind==='manager'&&p.rate?.pct?` · ${p.rate.pct}% от выручки`:''}`; };
-/* Кому применяется пресет: все активные сотрудники должности (отключённые не трогаем) */
+/* Кому применяется пресет: все активные сотрудники должности (отключённые не трогаем).
+   Для тренеров — общий список: внешние тренеры + сотрудники с совмещением «тренер». */
 function presetTargets(kind){
   if (kind==='staff') return activeStaff().filter(u => isAdminRole(u) && !isOwner(u)).map(u => u.id);
-  if (kind==='trainers') return (S.data.trainers||[]).filter(t => t.active).map(t => t.id);
+  if (kind==='trainers') return payPeople('tr').map(p => p.id);
   return payPeople(kind).map(p => p.id);
 }
 /* Ставка первого в списке — предзаполняет новый пресет текущими значениями */
@@ -2686,11 +2771,15 @@ function presetPrefill(kind){
   const rk = kind==='staff' ? 'staff' : kind;
   return { ...PAY_DEFAULT[kind==='staff' ? 'tr' : kind], ...((((S.data.rates||{})[rk])||{})[id] || {}) };
 }
+/* Ключ начислений (tr/mgr/smm) → ключ пресета (trainers/manager/smm): раньше несовпадение ключей
+   ломало вкладки «Тренеры»/«Управляющий»/«СММ» — клик по ним ничего не делал */
+const PRESET_KIND_OF = { tr:'trainers', mgr:'manager', smm:'smm' };
 /* Панель пресетов над таблицей начислений или в карточке ставок */
 function presetBar(kind){
+  const K = PRESET_KINDS[kind] || { title:'', modes:{} };   // защита от неизвестного ключа
   const list = presetsOf(kind);
   return `<div class="preset-bar"><span class="small muted">Пресет ставки:</span>
-    <select class="input pill" id="preset-sel" aria-label="Пресет ставок для ${esc(PRESET_KINDS[kind].title.toLowerCase())}">
+    <select class="input pill" id="preset-sel" aria-label="Пресет ставок для ${esc(K.title.toLowerCase())}">
       <option value="">— выберите —</option>${list.map(p => `<option value="${p.id}">${esc(p.name)} · ${esc(presetDesc(p))}</option>`).join('')}</select>
     <button type="button" class="btn sm" data-act="preset-apply" data-kind="${kind}"${list.length?'':' disabled'} title="Проставить выбранную ставку всем активным сотрудникам должности">Применить ко всем</button>
     <button type="button" class="btn sm" data-act="preset-edit" data-kind="${kind}" data-id="">+ Пресет из текущей ставки</button>
@@ -2729,7 +2818,7 @@ function payKindScreen(kind, M){
   const total = rows.reduce((x,r) => x + r.a.sum, 0), paid = rows.reduce((x,r) => x + r.paid, 0);
   const unitsCol = kind!=='mgr';
   return `<div class="card"><div class="card-h"><h3>${K.title} · ${monthName(M).toLowerCase()}</h3><span class="small muted">начислено ${money(total)} · выдано ${money(paid)}</span></div>
-    ${presetBar(kind)}
+    ${presetBar(PRESET_KIND_OF[kind] || kind)}
     <div class="tbl-wrap"><table class="tbl pay-tbl"><thead><tr><th>Сотрудник</th><th>Как платим</th><th class="r">Ставка, ₽</th>${kind==='mgr'?'<th class="r">% от выручки</th>':''}${unitsCol?`<th class="r">${K.unit}</th>`:''}<th class="r">Премия</th><th class="r">Сумма вручную</th><th class="r">Начислено</th><th class="r">Выдано</th><th></th></tr></thead><tbody>
     ${rows.map(({pp,a,paid}) => { const showUnits = unitsCol && a.rate.mode!=='fixed'; return `<tr><td><b>${esc(pp.name)}</b>${pp.sub?`<div class="small muted">${esc(pp.sub)}</div>`:''}</td>
       <td><select class="input pill" data-prate="${kind}" data-id="${pp.id}" data-f="mode" aria-label="Как платим ${esc(pp.name)}">${Object.entries(K.modes).map(([k,v]) => `<option value="${k}"${a.rate.mode===k?' selected':''}>${v}</option>`).join('')}</select></td>
@@ -3026,33 +3115,68 @@ function shiftChip(x, compact){
   return `<span class="sh-chip${x.adminId===S.user.id?' me':''}" style="--c:${esc(u?.color||'#E2DDF2')}" title="${esc(u?.name||'')} ${x.start}–${x.end}${x.half?', половина смены':''}">
     <i></i><b>${esc(compact ? (u?.name||'?').slice(0,3) : (u?.name||'?'))}</b><span class="num">${x.start.replace(':00','')}–${x.end.replace(':00','')}</span>${x.half?'<em>½</em>':''}${KIND_SHORT[k]&&!compact?`<em>${KIND_SHORT[k]}</em>`:''}</span>`;
 }
+/* Шкала дня 07:00–23:00 — для наглядных полос смен в календаре и списке дней */
+const DAY_FROM = 7*60, DAY_TO = 23*60;
+const barPos = t => Math.max(0, Math.min(100, (toMin(t)-DAY_FROM)/(DAY_TO-DAY_FROM)*100));
+/* Отсчёт показываем с шагом 5 минут: текст не «дёргается» каждую минуту,
+   а панель может не перерисовываться лишний раз (анти-моргание) */
+const durStr = (min, round5) => { const m = round5 ? Math.max(5, Math.round(min/5)*5) : Math.round(min); return m>=60 ? `${Math.floor(m/60)} ч ${pad(m%60)} мин` : `${m} мин`; };
+/* Живой статус смены: ещё не началась / идёт / завершилась */
+function shiftStatus(x){
+  const now = new Date(); const nm = now.getHours()*60 + now.getMinutes(); const s = toMin(x.start), e = toMin(x.end);
+  if (nm < s) return { k:'wait', label:`начало в ${x.start} · через ${durStr(s-nm, true)}` };
+  if (nm >= e) return { k:'done', label:`завершилась в ${x.end}` };
+  return { k:'now', label:`смена идёт · до конца ${durStr(e-nm, true)}` };
+}
+/* Обновление обратного отсчёта прямо в DOM — без перерисовки страницы */
+function liveShiftStatus(){
+  if (!app || !S.user) return;
+  root.querySelectorAll('.now-t[data-start]').forEach(el => { el.textContent = shiftStatus({ start:el.dataset.start, end:el.dataset.end }).label; });
+}
 function viewSched(){
   const M = S.schMonth || todayStr().slice(0,7); S.schMonth = M;
   const [y,m] = M.split('-').map(Number); const first = new Date(y, m-1, 1); const off = (first.getDay()+6)%7; const days = new Date(y, m, 0).getDate();
   const T = todayStr(); const can = Rules.canEditSchedule(S.user); const rates = { ...DEFAULT_RATES, ...((S.data.settings||{}).shiftRates||{}) };
+  const barHtml = list => `<span class="day-bar" aria-hidden="true">${list.map(x => `<i style="left:${barPos(x.start).toFixed(1)}%;width:${(barPos(x.end)-barPos(x.start)).toFixed(1)}%;background:${esc(userById(x.adminId)?.color||'#C9BFE8')}"></i>`).join('')}</span>`;
   const cells = [];
   for (let i=0;i<off;i++) cells.push('<div class="sch-day empty" aria-hidden="true"></div>');
   for (let d=1; d<=days; d++){
-    const date = `${M}-${pad(d)}`; const list = shiftsOn(date); const dow = parseYmd(date).getDay();
-    cells.push(`<${can?'button':'div'} class="sch-day${date===T?' today':''}${dow===0||dow===6?' we':''}"${can?` data-act="sch-day" data-d="${date}" aria-label="${fmtDay(date)}: изменить смены"`:''}>
-      <span class="d num">${d}</span>${list.map(x => shiftChip(x, true)).join('')}${!list.length?'<span class="none">нет смены</span>':''}</${can?'button':'div'}>`);
+    const date = `${M}-${pad(d)}`; const list = shiftsOn(date); const dow = parseYmd(date).getDay(); const past = date < T;
+    cells.push(`<${can?'button':'div'} class="sch-day${date===T?' today':''}${dow===0||dow===6?' we':''}${past?' past':''}${!past && !list.length && can?' free':''}"${can?` data-act="sch-day" data-d="${date}" aria-label="${fmtDay(date)}: изменить смены"`:''}>
+      <span class="d num">${d}<em>${DOW[dow]}</em></span>${list.map(x => shiftChip(x, true)).join('')}${barHtml(list)}${!list.length?`<span class="none">${past?'—':can?'поставить':'нет смены'}</span>`:''}</${can?'button':'div'}>`);
   }
   const admins = shiftStaff().filter(u => isAdminRole(u) || (S.data.schedule||[]).some(x => x.adminId===u.id && x.date.slice(0,7)===M));
   const sums = admins.map(a => { const l = (S.data.schedule||[]).filter(x => x.adminId===a.id && x.date.slice(0,7)===M).map(x => ({ ...x, ...shiftPay(x, rates) }));
     return { a, n:l.reduce((s,x)=>s+x.units,0), hours:l.reduce((s,x)=>s+x.hours,0), pay:l.reduce((s,x)=>s+x.pay,0), halves:l.filter(x=>x.half).length }; });
   const todayList = shiftsOn(T);
+  const maxN = Math.max(1, ...sums.map(r => r.n));
+  /* Охват месяца: сколько дней закрыто сменами (для текущего месяца — из прошедших и сегодняшнего) */
+  const isCur = M === T.slice(0,7);
+  const lastDay = isCur ? Number(T.slice(8)) : days;
+  let covered = 0, halvesMonth = 0, hoursMonth = 0;
+  for (let d=1; d<=days; d++){ const date = `${M}-${pad(d)}`; const l = shiftsOn(date); if (l.length){ if (d <= lastDay) covered++; halvesMonth += l.filter(x=>x.half).length; hoursMonth += l.reduce((s,x)=>s+shiftPay(x,rates).hours,0); } }
+  const covPct = lastDay ? Math.round(covered/lastDay*100) : 0;
   const agenda = []; for (let d=1; d<=days; d++){ const date = `${M}-${pad(d)}`; if (date < T && M===T.slice(0,7)) continue; const list = shiftsOn(date);
-    agenda.push(`<div class="ag-row${date===T?' today':''}" ${can?`data-act="sch-day" data-d="${date}" role="button" tabindex="0"`:''}><div class="ag-d"><b>${parseYmd(date).getDate()}</b><span>${DOW[parseYmd(date).getDay()]}</span></div><div class="ag-s">${list.map(x => shiftChip(x)).join('') || '<span class="none">нет смены</span>'}</div></div>`); }
+    agenda.push(`<div class="ag-row${date===T?' today':''}" ${can?`data-act="sch-day" data-d="${date}" role="button" tabindex="0"`:''}><div class="ag-d"><b>${parseYmd(date).getDate()}</b><span>${DOW[parseYmd(date).getDay()]}</span></div>
+      <div class="ag-mid"><div class="ag-s">${list.map(x => shiftChip(x)).join('') || '<span class="none">нет смены</span>'}</div>${barHtml(list)}</div></div>`); }
   return `<div style="display:flex;flex-direction:column;gap:16px">
     <div class="toolbar"><h2>График смен</h2><span class="spacer"></span>
       <div class="datebox"><button class="iconbtn" data-act="sch-shift" data-n="-1" aria-label="Предыдущий месяц">‹</button><span class="mlabel">${monthName(M)}</span><button class="iconbtn" data-act="sch-shift" data-n="1" aria-label="Следующий месяц">›</button></div></div>
-    <div class="card today-shift"><span class="eyebrow">Сегодня на смене</span>${todayList.length ? `<div class="chips">${todayList.map(x => shiftChip(x)).join('')}</div>` : '<span class="muted">по графику никого</span>'}
-      ${can ? '<span class="small muted">Нажмите на день, чтобы поставить или изменить смену. По умолчанию — 09:00–21:00.</span>' : '<span class="small muted">График меняют управляющий и владельцы.</span>'}</div>
+    <div class="card today-shift"><span class="eyebrow">Сегодня · ${fmtDay(T)}</span>${todayList.length ? `<div class="chips">${todayList.map(x => shiftChip(x)).join('')}</div>
+      <div class="now-line">${todayList.map(x => { const st = shiftStatus(x); return `<span class="now-st ${st.k}"><i aria-hidden="true"></i>${esc(userById(x.adminId)?.name||'')}: <span class="now-t" data-start="${x.start}" data-end="${x.end}">${st.label}</span></span>`; }).join('')}</div>` : '<span class="muted">по графику сегодня никого</span>'}
+      ${can ? '<span class="small muted">Нажмите на день, чтобы поставить или изменить смену. По умолчанию — 09:00–21:00, половины: 1-я 09:00–15:00, 2-я 15:00–21:00.</span>' : '<span class="small muted">График меняют управляющий и владельцы.</span>'}</div>
     <div class="card sch-card"><div class="sch-grid">${['пн','вт','ср','чт','пт','сб','вс'].map(x=>`<div class="dow">${x}</div>`).join('')}${cells.join('')}</div>
       <div class="sch-agenda">${agenda.join('')}</div>
-      <div class="legend" style="margin-top:12px"><span><b>½</b> — половина смены</span><span><b>утро+</b> — начало раньше 08:30</span><span><b>вечер+</b> — конец позже 21:30</span></div></div>
-    <div class="card"><div class="card-h"><h3>Итоги месяца</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Сотрудник</th><th class="r">Смен</th><th class="r">Из них половин</th><th class="r">Часов</th>${can?'<th class="r">Фикс. часть</th>':''}</tr></thead><tbody>
-      ${sums.map(r => `<tr><td><span style="display:inline-flex;gap:8px;align-items:center">${ava(r.a.id,true)}<b>${esc(r.a.name)}</b></span></td><td class="r">${String(r.n).replace('.',',')}</td><td class="r">${r.halves||'—'}</td><td class="r">${Math.round(r.hours)}</td>${can?`<td class="r"><b>${money(r.pay)}</b></td>`:''}</tr>`).join('')}
+      <div class="legend" style="margin-top:12px"><span><b>½</b> — половина смены</span><span><b>утро+</b> — начало раньше 08:30</span><span><b>вечер+</b> — конец позже 21:30</span><span><b>полоса</b> — время смены на шкале 07–23</span></div></div>
+    <div class="bigkpis">
+      <div class="card bigkpi"><span class="eyebrow">Смен всего</span><b class="num">${String(sums.reduce((s,r)=>s+r.n,0)).replace('.',',')}</b><span class="small muted">${monthName(M)}</span></div>
+      <div class="card bigkpi"><span class="eyebrow">Из них половин</span><b class="num">${halvesMonth}</b><span class="small muted">1-я 09–15 · 2-я 15–21</span></div>
+      <div class="card bigkpi"><span class="eyebrow">Часов</span><b class="num">${Math.round(hoursMonth)}</b><span class="small muted">по времени смен</span></div>
+      <div class="card bigkpi"><span class="eyebrow">Дней закрыто</span><b class="num">${covered} / ${lastDay}</b><span class="small muted">${isCur?'с начала месяца':'весь месяц'} · ${covPct}%</span></div></div>
+    <div class="card"><div class="card-h"><h3>Итоги месяца</h3><span class="small muted">${monthName(M)}</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Сотрудник</th><th style="width:34%">Смен за месяц</th><th class="r">Смен</th><th class="r">Из них половин</th><th class="r">Часов</th>${can?'<th class="r">Фикс. часть</th>':''}</tr></thead><tbody>
+      ${sums.map(r => `<tr><td><span style="display:inline-flex;gap:8px;align-items:center">${ava(r.a.id,true)}<b>${esc(r.a.name)}</b></span></td>
+        <td><span class="emp-bar" title="${String(r.n).replace('.',',')} смен"><i style="width:${Math.round(r.n/maxN*100)}%;background:${esc(r.a.color||'#C9BFE8')}"></i></span></td>
+        <td class="r">${String(r.n).replace('.',',')}</td><td class="r">${r.halves||'—'}</td><td class="r">${Math.round(r.hours)}</td>${can?`<td class="r"><b>${money(r.pay)}</b></td>`:''}</tr>`).join('')}
     </tbody></table></div>${can?'<p class="small muted">На смену можно ставить администраторов, управляющего и владельцев; одновременно — только один человек. Оплата смен попадает в «Продажи и зарплата» автоматически, смены владельцев не оплачиваются.</p>':''}</div></div>`;
 }
 function shiftsModal(m){
@@ -3068,8 +3192,10 @@ function shiftsModal(m){
       <div class="sh-pay small"><b>${money(sp.pay)}</b><span class="muted">${SHIFT_TYPES.find(t=>t.k===sp.kind).name.toLowerCase()}${r.half?', половина':''}</span></div>
       <button type="button" class="iconbtn" data-act="sr-del" data-i="${i}" aria-label="Убрать смену">✕</button></div>`; }).join('') : '<p class="muted">В этот день смен нет.</p>'}
     ${(() => { const so = rows.slice().sort((x,y) => x.start.localeCompare(y.start)); for (let i=1;i<so.length;i++) if (so[i].start < so[i-1].end) return `<div class="note warn">Одновременно может работать только один администратор. Смены ${so[i-1].start}–${so[i-1].end} и ${so[i].start}–${so[i].end} пересекаются — поправьте время.</div>`; return ''; })()}
-    <div class="toolbar"><button type="button" class="btn sm" data-act="sr-add">+ Смена 09:00–21:00</button><button type="button" class="btn sm" data-act="sr-add" data-half="1">+ Вторая половина 15:00–21:00</button></div>
-    <p class="small muted">Половинчатая смена оплачивается по коэффициенту ${String(rates.halfFactor).replace('.',',')} от ставки (меняется в «Продажи и зарплата»).</p>
+    <div class="toolbar"><button type="button" class="btn sm" data-act="sr-add">+ Смена 09:00–21:00</button>
+      <button type="button" class="btn sm" data-act="sr-add" data-half1="1"${rows.some(r => r.end <= '15:00') ? ' disabled title="Первая половина на этот день уже есть»' : ''}>+ 1-я половина 09:00–15:00</button>
+      <button type="button" class="btn sm" data-act="sr-add" data-half="1"${rows.some(r => r.start >= '15:00') ? ' disabled title="Вторая половина на этот день уже есть»' : ''}>+ 2-я половина 15:00–21:00</button></div>
+    <p class="small muted">Половины смены: 1-я 09:00–15:00 и 2-я 15:00–21:00 — в день можно закрыть двумя людьми. Половинчатая смена оплачивается по коэффициенту ${String(rates.halfFactor).replace('.',',')} от ставки (меняется в «Продажи и зарплата»).</p>
     <div class="modal-f"><span class="spacer"></span><button class="btn" data-act="close">Отмена</button><button class="btn primary" data-act="sr-save">Сохранить</button></div></div></div>`;
 }
 
@@ -3179,9 +3305,19 @@ function computeNotifications(){
   });
   if (ty.comments) S.data.tasks.filter(t => t.assignee===me || t.helper===me || t.createdBy===me).forEach(t => (t.comments||[]).filter(c => c.by!==me && now - new Date(c.at).getTime() < 3*864e5)
     .forEach(c => out.push({ id:'cm-'+c.id, at:c.at, icon:'💬', title:`${nameOf(c.by)} прокомментировал(а)`, text:`«${t.title}»: ${c.text}`, task:t.id })));
-  if (ty.schedule && isAdminRole(S.user)){ const tm = addDays(T,1); const sTom = shiftsOn(tm).find(x => x.adminId===me), sTod = shiftsOn(T).find(x => x.adminId===me);
+  /* Напоминания о сменах — всем, кто может стоять в графике: админы, управляющий, владельцы */
+  if (ty.schedule && (isAdminRole(S.user) || isManager(S.user) || isOwner(S.user))){ const tm = addDays(T,1); const sTom = shiftsOn(tm).find(x => x.adminId===me), sTod = shiftsOn(T).find(x => x.adminId===me);
+    /* Напоминание ДО выхода на смену: срабатывает, когда до начала осталось меньше shiftRemindMin минут */
+    const rm = Number(st.shiftRemindMin ?? 60);
+    if (sTod && rm > 0){
+      const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+      const diff = toMin(sTod.start) - nowMin;
+      if (diff > 0 && diff <= rm) out.push({ id:`shr-${T}-${sTod.start}`, at:`${T}T${sTod.start}:00`, icon:'⏳', title:`Через ${durStr(diff)} ваша смена`, text:`Начало в ${sTod.start}, конец в ${sTod.end}${sTod.half?' (половина смены)':''}. Не забудьте отчёт в конце дня.`, view:'sched', urgent:true });
+    }
     if (sTod) out.push({ id:'sh-'+T, at:T+'T07:00:00', icon:'🗓', title:'Сегодня ваша смена', text:`${sTod.start}–${sTod.end}${sTod.half?' (половина смены)':''}`, view:'sched' });
-    if (sTom) out.push({ id:'sh-'+tm, at:T+'T18:00:00', icon:'🗓', title:'Завтра ваша смена', text:`${sTom.start}–${sTom.end}${sTom.half?' (половина смены)':''}`, view:'sched' }); }
+    /* О завтрашней смене напоминаем накануне вечером — время настраивается (shiftEveAt, пусто — выключено) */
+    const eve = String(st.shiftEveAt ?? '19:00');
+    if (sTom && eve) out.push({ id:'sh-'+tm, at:`${T}T${eve}:00`, icon:'🗓', title:'Завтра ваша смена', text:`${sTom.start}–${sTom.end}${sTom.half?' (половина смены)':''}`, view:'sched' }); }
   if (ty.report){ const hasRep = d => (S.data.reports||[]).some(r => r.date===d);
     if (shiftsOn(T).some(x => x.adminId===me) && new Date().getHours() >= 20 && !hasRep(T)) out.push({ id:'rp-'+T, at:T+'T20:00:00', icon:'🧾', title:'Сдайте отчёт смены', text:'Выручка, продления, касса и фото чека', view:'rep', urgent:true });
     if ((isOwner(S.user) || isManager(S.user)) && shiftsOn(addDays(T,-1)).length && !hasRep(addDays(T,-1))) out.push({ id:'rpm-'+addDays(T,-1), at:T+'T09:00:00', icon:'🧾', title:'Нет отчёта за вчера', text:`Смена: ${shiftsOn(addDays(T,-1)).map(x => nameOf(x.adminId)).join(', ')}`, view:'rep', date:addDays(T,-1) }); }
@@ -3203,8 +3339,9 @@ function notifModal(){
 }
 function notifySetModal(){
   const st = { ...defaultNotify(S.user.role), ...(S.data.notify||{}) }; const ty = st.types||{};
+  const onShift = isAdminRole(S.user) || isManager(S.user) || isOwner(S.user);   // может стоять в графике
   const TYPES = [['assigned','Мне поставили задачу'],['deadline','Скоро дедлайн моей задачи'],['overdue','Моя задача просрочена'],['comments','Комментарии к моим задачам'],
-    ...(isAdminRole(S.user)?[['schedule','Напоминание о смене (сегодня и завтра)']]:[]), ['report', isOwner(S.user)||isManager(S.user) ? 'Отчёт смены не сдан' : 'Пора сдать отчёт смены'],
+    ...(onShift?[['schedule','Напоминания о сменах (до начала и накануне)']]:[]), ['report', isOwner(S.user)||isManager(S.user) ? 'Отчёт смены не сдан' : 'Пора сдать отчёт смены'],
     ...(isOwner(S.user)?[['signup','Новые заявки на доступ']]:[]), ['payout','Конверт с зарплатой выдан']];
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone;
@@ -3221,6 +3358,16 @@ function notifySetModal(){
     <div class="field"><span class="small muted" style="font-weight:600">О чём сообщать</span>${TYPES.map(([k,l]) => `<label class="sw"><input type="checkbox" data-nt="${k}"${ty[k]?' checked':''}><span>${l}</span></label>`).join('')}</div>
     <div class="grid3"><div class="field"><label for="nt-rem">Напомнить о дедлайне за</label><select class="input" id="nt-rem">${[15,30,60,120,180].map(n => `<option value="${n}"${Number(st.remindMin)===n?' selected':''}>${n<60?n+' мин':n/60+' ч'}</option>`).join('')}</select></div>
       <div class="field"><label for="nt-qf">Тихие часы с</label><input class="input" id="nt-qf" type="time" value="${st.quietFrom||''}"></div><div class="field"><label for="nt-qt">до</label><input class="input" id="nt-qt" type="time" value="${st.quietTo||''}"></div></div>
+    ${onShift ? `<div class="field shift-rem"><span class="small muted" style="font-weight:600">Напоминание до выхода на смену</span>
+      <div class="grid3">
+        <div class="field"><label for="nt-shrem">До начала смены за</label><select class="input" id="nt-shrem">
+          <option value="0"${!Number(st.shiftRemindMin ?? 60)?' selected':''}>выключено</option>
+          ${[15,30,45,60,90,120,180].map(n => `<option value="${n}"${Number(st.shiftRemindMin ?? 60)===n?' selected':''}>${n<60?n+' мин':n/60+' ч'}</option>`).join('')}</select></div>
+        <div class="field"><label for="nt-sheve">Накануне вечером в</label><input class="input" id="nt-sheve" type="time" value="${esc(st.shiftEveAt ?? '19:00')}" list="nt-sheve-list">
+          <datalist id="nt-sheve-list"><option value="18:00"></option><option value="19:00"></option><option value="20:00"></option><option value="21:00"></option></datalist></div>
+        <div class="field"><label for="nt-sheve-off">Или выключить накануне</label><label class="sw" style="margin-top:8px"><input type="checkbox" id="nt-sheve-off"${!st.shiftEveAt && st.shiftEveAt!==undefined || st.shiftEveAt===''?' checked':''}><span>не напоминать накануне</span></label></div>
+      </div>
+      <span class="small muted">Придёт и в панель, и на телефон (пуш/Telegram): «Через N минут ваша смена». Накануне — во сколько напомнить о завтрашней смене.</span></div>` : ''}
     <div class="field"><span class="small muted" style="font-weight:600">Не беспокоить по дням недели</span>${dayChips('nt-days', st.offDays||[])}</div>
     ${isAdminRole(S.user) ? `<label class="sw"><input type="checkbox" id="nt-only"${st.onlyShifts?' checked':''}><span>Присылать только в дни моих смен по графику</span></label>` : ''}
     <div class="field"><span class="small muted" style="font-weight:600">Отдельные нерабочие дни (отпуск, отгул)</span>
@@ -3425,12 +3572,15 @@ function handleCsvFile(file, preview) {
     try {
       const orders = parseOrdersCSV(String(reader.result || ''));
       if (!orders.length) { preview.innerHTML = '<p class="muted">В файле нет подходящих строк.</p>'; return; }
-      const total = orders.reduce((a, o) => a + (o.netAmount > 0 && !o.isRefund ? o.netAmount : 0), 0);
-      const valid = orders.filter(o => o.netAmount > 0 && !o.isRefund);
+      /* Частичные возвраты (вернули не всё) идут в импорт за вычетом возврата;
+         полные возвраты и бесплатные строки отсеиваются — у них netAmount ≤ 0. */
+      const valid = orders.filter(o => o.netAmount > 0);
+      const total = valid.reduce((a, o) => a + o.netAmount, 0);
+      const fullRefunds = orders.filter(o => o.isRefund && o.netAmount <= 0).length;
       const unknown = [...new Set(valid.filter(o => !PRODUCT[o.productKey]).map(o => o.itemsName))];
       preview.innerHTML = `
         <div class="note">Найдено строк: <b>${orders.length}</b>, к импорту: <b>${valid.length}</b> на сумму <b>${money(total)}</b>.
-          Возвраты, бесплатные (0 ₽) и дубликаты (та же дата+клиент+сумма) пропускаются.
+          Полные возвраты (${fullRefunds}), бесплатные (0 ₽) и дубликаты (та же дата+клиент+сумма) пропускаются.
           ${unknown.length ? `<b>Нераспознанные позиции</b> (попадут в «Прочие продажи из журнала»): ${esc(unknown.join('; '))}.` : 'Все позиции распознаны.'}</div>
         <div class="tbl-wrap" style="max-height:220px;overflow:auto;margin:8px 0">
           <table class="tbl"><thead><tr><th>Дата</th><th>Клиент</th><th>Товар</th><th class="r">Сумма</th><th>Продавец</th></tr></thead>
@@ -3672,11 +3822,15 @@ root.addEventListener('click', e => {
     /* график */
     case 'sch-shift': { const [y,m] = (S.schMonth||todayStr().slice(0,7)).split('-').map(Number); S.schMonth = ymd(new Date(y, m-1+Number(el.dataset.n), 1)).slice(0,7); render(); break; }
     case 'sch-day': { const date = el.dataset.d; S.modal = { type:'shifts', date, rows: shiftsOn(date).map(x => ({ ...x })) }; render(); break; }
-    case 'sr-add': { const half = el.dataset.half==='1'; const used = S.modal.rows.map(r => r.adminId); const a = adminsList().find(x => !used.includes(x.id)) || shiftStaff().find(x => !used.includes(x.id)) || shiftStaff()[0];
+    case 'sr-add': { const half = el.dataset.half==='1'; const half1 = el.dataset.half1==='1'; const used = S.modal.rows.map(r => r.adminId); const a = adminsList().find(x => !used.includes(x.id)) || shiftStaff().find(x => !used.includes(x.id)) || shiftStaff()[0];
       const rows = S.modal.rows; const lastEnd = rows.map(r => r.end).sort().pop();
       if (half && rows.length===1 && rows[0].start < '15:00' && rows[0].end > '15:00'){ rows[0].end = '15:00'; rows[0].half = true; }
       const start = half ? (lastEnd && lastEnd < '21:00' && rows.length>1 ? lastEnd : '15:00') : SHIFT_DEFAULT.start;
-      rows.push({ adminId:a?.id||'', start, end:SHIFT_DEFAULT.end, half, type:'auto', note:'' }); render(); break; }
+      if (half1){ /* 1-я половина 09:00–15:00: если целая смена перекрывает 15:00 — оставляем от неё вторую половину */
+        if (rows.length===1 && rows[0].start < '15:00' && rows[0].end > '15:00'){ rows[0].start = '15:00'; rows[0].half = true; }
+        rows.push({ adminId:a?.id||'', start:'09:00', end:'15:00', half:true, type:'auto', note:'' });
+      } else rows.push({ adminId:a?.id||'', start, end:SHIFT_DEFAULT.end, half, type:'auto', note:'' });
+      render(); break; }
     case 'sr-del': S.modal.rows.splice(Number(el.dataset.i),1); render(); break;
     case 'sr-save': { const m = S.modal; run(async () => { S.data.schedule = await Api.call('saveShifts', { date:m.date, shifts:m.rows }); S.modal = null; render(); }, 'График сохранён'); break; }
     /* отчёт смены */
@@ -3714,7 +3868,11 @@ root.addEventListener('click', e => {
     case 'pf-range': { const M = S.payMonth; const last = ymd(new Date(Number(M.slice(0,4)), Number(M.slice(5)), 0)); const k = el.dataset.k;
       document.getElementById('pf-from').value = k==='h2' ? M+'-16' : M+'-01'; document.getElementById('pf-to').value = k==='h1' ? M+'-15' : last; break; }
     case 'extra-role': { const u = userById(id); const r = el.dataset.r; const has = (u.extraRoles||[]).includes(r);
-      run(async () => { const x = await Api.call('saveUser', { user:{ id, extraRoles: has ? u.extraRoles.filter(z => z!==r) : [...(u.extraRoles||[]), r] } }); replaceIn(S.data.users, x); render(); }, has ? 'Совмещение снято' : 'Совмещение добавлено'); break; }
+      run(async () => { const x = await Api.call('saveUser', { user:{ id, extraRoles: has ? u.extraRoles.filter(z => z!==r) : [...(u.extraRoles||[]), r] } });
+        replaceIn(S.data.users, x);
+        /* совмещение «тренер» меняет и список тренеров — подтягиваем свежий, чтобы категория «Тренеры» обновилась сразу */
+        if (r==='trainer'){ try { await loadAll(); return; } catch(e){} }
+        render(); }, has ? 'Совмещение снято' : 'Совмещение добавлено'); break; }
     /* финансы: режим редактирования */
     case 'cle-add': S.modal.cl.push({ id:'n'+Date.now().toString(36), text:'', p:0, done:false }); redrawCl(); { const ins = root.querySelectorAll('[data-cle]'); ins[ins.length-1]?.focus(); } break;
     case 'cle-del': S.modal.cl.splice(Number(el.dataset.i),1); redrawCl(); break;
@@ -3744,7 +3902,17 @@ root.addEventListener('click', e => {
       const orders = S._csvOrders;
       if (!orders || !orders.length) { toast('Нет данных для импорта', true); break; }
       run(async () => {
-        const r = await Api.call('importFinanceOrders', { month: S._csvMonth || S.finMonth, orders });
+        let r;
+        try {
+          r = await Api.call('importFinanceOrders', { month: S._csvMonth || S.finMonth, orders });
+        } catch (e) {
+          /* Самая частая причина: на сервере ещё старый Code.gs — метод импорта неизвестен.
+             Сохранить код в редакторе мало: нужно выпустить новую версию развертывания. */
+          if (e.code === 'BAD_REQUEST' || /Неизвестное действие/i.test(e.message)) {
+            e.message = 'Сервер ещё работает на старом коде. Откройте Apps Script → «Развернуть» → «Управление развертываниями» → карандаш → Версия: «Новая версия» → «Развернуть», затем повторите импорт.';
+          }
+          throw e;
+        }
         S.data.sales = r.sales || S.data.sales;
         S._csvOrders = null;
         const prev = document.getElementById('csv-preview-area');
@@ -3827,7 +3995,10 @@ root.addEventListener('change', e => {
     return;
   }
   if (r.matches('select[data-act="role"]')){
-    run(async () => { const u = await Api.call('saveUser', { user:{ id:r.dataset.id, role:r.value } }); replaceIn(S.data.users, u); render(); }, 'Роль изменена');
+    run(async () => { const u = await Api.call('saveUser', { user:{ id:r.dataset.id, role:r.value } }); replaceIn(S.data.users, u);
+      /* смена роли на/с «тренера» перестраивает список тренеров — обновляем целиком */
+      try { await loadAll(); return; } catch(e){}
+      render(); }, 'Роль изменена');
     return;
   }
   if (r.id==='tf-repeat'){ S.modal.task = { ...S.modal.task, ...readTaskForm() }; S.modal.repeat = r.checked; render(); return; }
@@ -3987,8 +4158,14 @@ root.addEventListener('submit', e => {
   }
   if (f.id==='notify-form'){
     const types = {}; f.querySelectorAll('[data-nt]').forEach(i => types[i.dataset.nt] = i.checked);
+    /* Напоминание до смены: за сколько минут и время напоминания накануне (галка «не напоминать» главнее) */
+    const shremEl = document.getElementById('nt-shrem');
+    const sheveOff = !!document.getElementById('nt-sheve-off')?.checked;
+    const sheveVal = String(v('nt-sheve')||'').trim();
     const notify = { push:document.getElementById('nt-push').checked, telegram:document.getElementById('nt-tg').checked, types, remindMin:Number(v('nt-rem')),
-      quietFrom:v('nt-qf'), quietTo:v('nt-qt'), offDays:[...f.querySelectorAll('#nt-days input:checked')].map(i => Number(i.value)), onlyShifts: !!document.getElementById('nt-only')?.checked };
+      quietFrom:v('nt-qf'), quietTo:v('nt-qt'), offDays:[...f.querySelectorAll('#nt-days input:checked')].map(i => Number(i.value)), onlyShifts: !!document.getElementById('nt-only')?.checked,
+      shiftRemindMin: shremEl ? (Number(shremEl.value)||0) : 0,
+      shiftEveAt: sheveOff ? '' : (/^\d{2}:\d{2}$/.test(sheveVal) ? sheveVal : '19:00') };
     run(async () => { S.data.notify = await Api.call('saveNotify', { notify }); S.modal = null; render(); if (notify.push) Push.enable(); }, 'Настройки уведомлений сохранены');
     return;
   }
@@ -4092,12 +4269,15 @@ root.addEventListener('submit', e => {
   }
 });
 
-/* Проверка дедлайнов: каждую минуту пересчитываем просрочку (без перезагрузки страницы) */
+/* Проверка дедлайнов: каждую минуту пересчитываем просрочку (без перезагрузки страницы).
+   Если ничего не изменилось, render() сам не трогает DOM — страница не моргает. */
 setInterval(() => {
   if (!S.user) return; pushNew();
   if (S.modal || document.activeElement?.matches('input,textarea,select')) return;
   render();
 }, 60000);
+/* Живой отсчёт «до конца смены» на графике — обновляем текст на месте, без перерисовки страницы */
+setInterval(() => { if (!S.user || S.modal) return; liveShiftStatus(); }, 30000);
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 10 · ОБНОВЛЕНИЕ, ПУШ, СТАРТ
@@ -4159,9 +4339,10 @@ const Push = {
 /* ТЕСТОВЫЙ КРЮЧОК (безопасно): в браузере window.__SP_HOOK__ не задан и эта строка ничего не делает.
    Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
 if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
-  S, Api, Auth, loadAll, render, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
+  S, Api, Auth, loadAll, render, buildAppHtml, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
   views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin },
-  modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal() },
+  modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal(), shifts:shiftsModal, notifyset:notifySetModal },
+  computeNotifications, shiftStatus, durStr,
   parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
   demo: (action, payload) => Api.call(action, payload)
 });

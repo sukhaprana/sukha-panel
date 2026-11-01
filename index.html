@@ -26,16 +26,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="panel.css?v=3">
+<link rel="stylesheet" href="panel.css?v=5">
 <style>html,body{margin:0;background:#F7F6FB} #sp-app{min-height:100vh;padding-top:env(safe-area-inset-top)}</style>
 </head>
 <body>
 <!-- Место, куда рисуется панель -->
 <div id="sp-app"><div class="wrap" id="sp-root"></div></div>
-<!-- Настройки → код панели. ?v=3 — «ломает» кеш CDN и браузера: при следующей публикации
+<!-- Настройки → код панели. ?v=5 — «ломает» кеш CDN и браузера: при следующей публикации
      увеличьте цифру здесь (и VERSION в sw.js), чтобы все сразу получили свежие файлы -->
-<script src="config.js?v=3"></script>
-<script src="panel.js?v=3"></script>
+<script src="config.js?v=5"></script>
+<script src="panel.js?v=5"></script>
 <!-- Фоновый помощник: пуш-уведомления и работа при плохом интернете -->
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});</script>
 </body>
