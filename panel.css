@@ -97,13 +97,30 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .role-tag{font-size:11.5px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line)}
 
 /* Вкладки */
-#sp-app .tabs-scroll{overflow-x:auto;scrollbar-width:none;margin-inline:-4px}
-#sp-app .tabs-scroll::-webkit-scrollbar{display:none}
+/* Вкладки: теперь их всего 5 (группы) — горизонтальный скролл больше не нужен,
+   а overflow:visible обязателен, иначе он обрежет выпадающие меню групп */
+#sp-app .tabs-scroll{overflow:visible}
 #sp-app .tabs{display:flex;gap:4px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;width:max-content;min-width:100%}
 #sp-app .tab{border:0;background:transparent;padding:9px 16px;border-radius:999px;font-weight:600;font-size:14px;color:var(--muted);cursor:pointer;white-space:nowrap;min-height:40px}
 #sp-app .tab:hover{color:var(--ink)}
 #sp-app .tab.on{background:var(--lav);color:var(--ink)}
 #sp-app .tab .cnt{display:inline-block;margin-left:6px;font-size:11px;background:var(--st-over);color:#fff;border-radius:999px;padding:0 6px;line-height:17px}
+
+/* Группы верхней навигации: 5 кнопок с выпадающими меню вместо 11 вкладок подряд.
+   Раскрытие — класс .open (ставит setNavOpen), клики мимо меню закрывают его. */
+#sp-app .nav-group{position:relative;display:flex}
+#sp-app .nav-group .grp{display:inline-flex;align-items:center;gap:6px}
+#sp-app .nav-group .grp .caret{display:inline-flex;opacity:.55;transition:transform .18s ease}
+#sp-app .nav-group.on>.grp,#sp-app .nav-group.open>.grp{background:var(--lav);color:var(--ink)}
+#sp-app .nav-group.open>.grp .caret{transform:rotate(180deg)}
+#sp-app .nav-drop{position:absolute;top:calc(100% + 8px);left:0;z-index:70;min-width:250px;background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 18px 44px rgba(35,25,80,.16);padding:6px;display:flex;flex-direction:column;gap:2px;opacity:0;visibility:hidden;transform:translateY(-6px);
+  transition:opacity .15s ease,transform .15s ease,visibility .15s}
+#sp-app .nav-group.open .nav-drop{opacity:1;visibility:visible;transform:none}
+#sp-app .nav-drop .tab{width:100%;text-align:left;border-radius:10px;display:flex;justify-content:space-between;align-items:center}
+#sp-app .nav-drop .tab.on{background:var(--lav)}
+#sp-app .nav-group:last-child .nav-drop{left:auto;right:0} /* последнее меню не вылезает за край */
+@media (max-width:960px){#sp-app .nav-drop{display:none}} /* на телефоне меню — нижняя навигация и шторка «Ещё» */
 
 /* Баннер просрочки */
 #sp-app .banner{display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap;background:var(--st-over-soft);
@@ -329,6 +346,11 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .subtabs{display:flex;gap:6px;flex-wrap:wrap}
 #sp-app .subtab{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px;font-weight:600;cursor:pointer;min-height:38px;font-size:14px}
 #sp-app .subtab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+/* Панель пресетов ставок (шаблоны зарплаты) — селект + действия в одну строку */
+#sp-app .preset-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--surface-2);border:1px dashed var(--line);border-radius:12px;padding:8px 10px;margin-bottom:10px}
+#sp-app .preset-bar select{max-width:280px}
+#sp-app .preset-bar .btn{min-height:34px}
 #sp-app .sal-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
 #sp-app .sal-col{display:flex;flex-direction:column;gap:18px;min-width:0}
 #sp-app .sal-side{min-width:0;display:flex;flex-direction:column;gap:18px}
@@ -474,6 +496,7 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .grab{width:40px;height:5px;border-radius:9px;background:var(--line);margin:2px auto 8px}
 #sp-app .sheet-i{display:flex;justify-content:space-between;align-items:center;text-align:left;border:0;background:none;font:inherit;font-size:16px;font-weight:600;padding:14px;border-radius:12px;cursor:pointer;color:var(--ink)}
 #sp-app .sheet-i:hover,#sp-app .sheet-i.on{background:var(--lav-soft)}
+#sp-app .sheet-g{font-size:11.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:10px 14px 2px} /* подпись группы в шторке «Ещё» */
 #sp-app .sheet-i .cnt{font-size:11px;background:var(--st-over);color:#fff;border-radius:999px;padding:0 6px;line-height:18px}
 
 
@@ -579,3 +602,11 @@ body{background:var(--bg);color:var(--ink)}
 @keyframes spShake{0%,100%{transform:none}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
 #sp-app .shake{animation:spShake .3s ease}
 @media (prefers-reduced-motion:reduce){#sp-app *{animation:none!important;transition:none!important}}
+
+/* Dropzone CSV import + chain-delete modal */
+#sp-app .dropzone{transition:border-color .15s,background .15s}
+#sp-app .dropzone:hover,#sp-app .dropzone.drag{border-color:var(--accent)!important;background:color-mix(in srgb,var(--lav) 35%,var(--surface))!important}
+#sp-app .btn.danger{background:var(--st-over);border-color:var(--st-over);color:#fff}
+#sp-app .btn.danger:hover{filter:brightness(.95)}
+#sp-app details summary{cursor:pointer;user-select:none}
+

@@ -348,6 +348,10 @@ const FIXED_EXPENSES = [
   { k:'accountant', name:'Бухгалтер', def:5000 }
 ];
 const PAYERS = { studio:'Студия', u1:'Влад (личные)', u2:'Катя (личные)' };
+/* Кто мог заплатить из личных средств: студия + собственники. Список динамический,
+   берётся из активных владельцев — в рабочем режиме не нужно править код под имена. */
+const payersList = () => [{ k:'studio', name:'Студия' }, ...activeStaff().filter(u => isOwner(u)).map(u => ({ k:u.id, name:`${u.name} (личные)` }))];
+const payerName = k => { const own = (S.data?.users||[]).find(u => u.id===k && isOwner(u)); return own ? `${own.name} (личные)` : 'Студия'; };
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 4 · ДАННЫЕ И ЛОГИКА СЕРВЕРА
@@ -681,7 +685,10 @@ function createServer(opts){
       const levels = Rules.levelsFor(u); const owner = isOwner(u); const pay = Rules.canSeePayroll(u);
       return {
         user: pubUser(u, true),
-        users: db.users.filter(x => owner || x.status==='active').map(x => pubUser(x, owner)),
+        users: db.users.filter(x => {
+          if (owner) return x.status !== 'rejected'; // владелец видит всех кроме отклонённых (включая отключённых)
+          return x.active && x.status === 'active'; // остальные — только активных
+        }).map(x => pubUser(x, owner)),
         trainers: db.trainers,
         tasks: db.tasks.filter(t => Rules.canSeeTask(u,t)),
         templates: db.templates.filter(t => levels.includes(t.level)),
@@ -690,7 +697,7 @@ function createServer(opts){
         notifications: owner ? db.notifications : [],
         ...(pay ? { sales:db.sales, payroll:db.payroll, plans:db.plans, penalties:db.penalties } : {}),
         ...(owner ? { finance:(ensureFinance(todayStr().slice(0,7)), db.finance), debt:db.debt, finConfig:db.finConfig, pay:db.pay||{} } : {}),
-        ...(pay ? { rates: ratesFor(u) } : {})
+        ...(pay ? { rates: ratesFor(u), ratePresets: db.ratePresets || [] } : {})
       };
     },
     saveTask({ task }, u){
@@ -701,6 +708,10 @@ function createServer(opts){
         const t = { id:uid('t'), block:'', desc:'', helper:'', comment:'', progress:0, status:'todo', priority:'mid', dueTime:CONFIG.DEFAULT_DUE_TIME, parentId:'',
           ...task, id:uid('t'), createdBy:u.id, createdAt:nowIso(), doneBy:'', doneAt:'', late:false, recurringId:'', comments:[], history:[{ at:nowIso(), by:u.id, text:'создана' }] };
         if (!t.title || !t.title.trim()) err('Укажите название задачи.','VALIDATION');
+        /* Безопасность: ответственный/помощник — только активные сотрудники (демо и сервер проверяют одинаково) */
+        ['assignee','helper'].forEach(k => { if (t[k]){ const a = db.users.find(x => x.id===t[k]); if (!a || !a.active || a.status!=='active') err('Ответственным можно назначить только активного сотрудника.','VALIDATION'); } });
+        /* Ограничение размера полей — защита от раздувания хранилища */
+        t.title = String(t.title).trim().slice(0,200); t.desc = String(t.desc||'').slice(0,2000); t.block = String(t.block||'').slice(0,60);
         if (!t.start) t.start = t.due;
         t.moves = []; t.checklist = (isOwner(u) || isManager(u)) ? normChecklist(t.checklist, t.id) : [];
         checkParent(t);
@@ -726,6 +737,44 @@ function createServer(opts){
       if (!Rules.canDeleteTask(u,t)) err('Удалять задачи могут только управляющий и владелец.');
       db.tasks.forEach(c => { if (c.parentId===id) c.parentId=''; });
       db.tasks = db.tasks.filter(x => x.id!==id); recompute(t.parentId); save(); return { ok:true };
+    },
+    /** Удаление цепочки связанных задач или всей серии повторяющихся (только owner/manager).
+     *  deleteFutureOnly: для recurring — только будущие незакрытые; иначе — шаблон + будущие. */
+    deleteTaskChain({ id, deleteFutureOnly }, u){
+      if (!isOwner(u) && !isManager(u)) err('Удалять цепочки задач могут только управляющий и владелец студии.','FORBIDDEN');
+      const target = db.tasks.find(x => x.id===id);
+      if (!target) err('Задача не найдена.','NOT_FOUND');
+      if (!Rules.canSeeTask(u, target)) err('Нет доступа к этой задаче.','FORBIDDEN');
+
+      const recurringId = target.recurringId;
+      const parentId = target.parentId;
+      const T = todayStr();
+      let removed = 0;
+
+      if (recurringId) {
+        if (deleteFutureOnly) {
+          const before = db.tasks.length;
+          db.tasks = db.tasks.filter(x => !(x.recurringId === recurringId && x.due >= target.due && x.status === 'todo'));
+          removed = before - db.tasks.length;
+        } else {
+          db.templates = (db.templates || []).filter(x => x.id !== recurringId);
+          const before = db.tasks.length;
+          db.tasks = db.tasks.filter(x => !(x.recurringId === recurringId && x.due >= T && x.status === 'todo'));
+          removed = before - db.tasks.length;
+        }
+      } else if (parentId || db.tasks.some(x => x.parentId === target.id)) {
+        const rootId = parentId || target.id;
+        const before = db.tasks.length;
+        db.tasks = db.tasks.filter(x => x.id !== rootId && x.parentId !== rootId);
+        removed = before - db.tasks.length;
+        // orphan any deeper? already filtered by parentId
+      } else {
+        db.tasks = db.tasks.filter(x => x.id !== id);
+        removed = 1;
+      }
+      recompute(target.parentId);
+      save();
+      return { ok: true, removed, tasks: db.tasks.filter(x => Rules.canSeeTask(u, x)) };
     },
     addComment({ id, text }, u){
       const t = db.tasks.find(x => x.id===id); if (!t || !Rules.canSeeTask(u,t)) err('Задача не найдена.','NOT_FOUND');
@@ -821,6 +870,8 @@ function createServer(opts){
       const owners = db.users.filter(x => x.role==='owner' && x.active && x.status==='active');
       if (i<0) err('Пользователь не найден.','NOT_FOUND');
       const old = db.users[i];
+      /* Безопасность: нельзя отключить самого себя — как на сервере */
+      if (user.active===false && old.id===u.id) err('Нельзя отключить свою собственную учётную запись.');
       if (old.role==='owner' && ((user.role && user.role!=='owner') || user.active===false) && owners.length<=1) err('Нельзя убрать последнего владельца.');
       if (user.role && !ROLES[user.role]) err('Неизвестная роль.','VALIDATION');
       if (user.extraRoles) user.extraRoles = user.extraRoles.filter(r => ROLES[r]);
@@ -942,6 +993,72 @@ function createServer(opts){
       const r = { mode: modes[rate.mode] ? rate.mode : Object.keys(modes)[0], amount: Math.max(0, Number(rate.amount)||0), ...(kind==='manager' ? { pct: Math.max(0, Math.min(100, Number(rate.pct)||0)) } : {}) };
       db.rates[kind] = db.rates[kind] || {}; db.rates[kind][id] = r; save(); return db.rates;
     },
+    /* ---------- ШАБЛОНЫ ЗАРПЛАТ: пресеты ставок (владелец и управляющий) ----------
+       Пресет — сохранённая ставка должности (режим + сумма + % для управляющего).
+       «Применить ко всем» проставляет её сразу всем активным сотрудникам должности. */
+    saveRatePreset({ p }, u){
+      if (!Rules.canEditSchedule(u)) err('Пресеты ставок меняют владелец и управляющий.','FORBIDDEN');
+      const kinds = { staff:RATE_MODES_ADMIN, trainers:RATE_MODES_TRAINER, manager:RATE_MODES_MANAGER, smm:RATE_MODES_SMM };
+      if (!kinds[p?.kind]) err('Неизвестный тип пресета.','VALIDATION');
+      const name = String(p.name||'').trim().slice(0,60);
+      if (!name) err('Дайте пресету название.','VALIDATION');
+      if (!kinds[p.kind][p.rate?.mode]) err('Неизвестный режим оплаты.','VALIDATION');
+      const rate = { mode:p.rate.mode, amount: Math.max(0, Math.min(1e7, Number(p.rate.amount)||0)) };
+      if (p.kind==='manager') rate.pct = Math.max(0, Math.min(100, Number(p.rate.pct)||0));
+      db.ratePresets = db.ratePresets || [];
+      let rec;
+      if (p.id){ rec = db.ratePresets.find(x => x.id===p.id); if (!rec) err('Пресет не найден.','NOT_FOUND'); rec.name = name; rec.rate = rate; }
+      else { rec = { id:uid('rp'), kind:p.kind, name, rate, createdAt:nowIso(), createdBy:u.id }; db.ratePresets.push(rec); }
+      save(); return { ok:true, presets:db.ratePresets, preset:rec };
+    },
+    deleteRatePreset({ id }, u){
+      if (!Rules.canEditSchedule(u)) err('Пресеты ставок меняют владелец и управляющий.','FORBIDDEN');
+      db.ratePresets = (db.ratePresets||[]).filter(x => x.id!==id);
+      save(); return { ok:true, presets:db.ratePresets };
+    },
+    applyRatePreset({ kind, presetId, ids }, u){
+      if (!Rules.canEditSchedule(u)) err('Применять пресеты могут только владелец и управляющий.','FORBIDDEN');
+      if (!{ staff:1, trainers:1, manager:1, smm:1 }[kind]) err('Неизвестный тип пресета.','VALIDATION');
+      const p = (db.ratePresets||[]).find(x => x.id===presetId && x.kind===kind);
+      if (!p) err('Пресет не найден.','NOT_FOUND');
+      const list = (Array.isArray(ids) ? ids : []).filter(x => typeof x==='string').slice(0,100);
+      if (!list.length) err('Список получателей пуст.','VALIDATION');
+      /* Управляющему нельзя применять пресет с «фикс в месяц» — как и вручную в saveRate */
+      if (!isOwner(u) && kind==='staff' && p.rate.mode==='fixed') err('Управляющий не переключает админов на «фикс в месяц» — это делает владелец.','FORBIDDEN');
+      db.rates[kind] = db.rates[kind] || {};
+      list.forEach(id => {
+        if (kind==='staff'){ const t = db.users.find(x => x.id===id); if (!t || isOwner(t)) return; /* админ-ставки — только не владельцам */
+          db.rates.staff[id] = { ...(db.rates.staff[id]||{}), mode:p.rate.mode, amount:p.rate.amount||0 };
+        } else db.rates[kind][id] = { ...(db.rates[kind][id]||{}), ...p.rate };
+      });
+      save(); return { ok:true, rates: isOwner(u) ? db.rates : ratesFor(u), applied:list.length, presets:db.ratePresets };
+    },
+    /* ---------- ШАБЛОНЫ ЗАРПЛАТ: копирование месяца (владелец и управляющий) ----------
+       Переносит из месяца-источника в выбранный: корректировки/премии/авансы/ручные суммы админов,
+       значения KPI, премии и ручные суммы tr/mgr/smm (кроме количеств занятий и публикаций), план продаж. */
+    copySalaryMonth({ from, to, parts }, u){
+      if (!Rules.canEditSchedule(u)) err('Копировать месяц могут только владелец и управляющий.','FORBIDDEN');
+      if (!/^\d{4}-\d{2}$/.test(from||'') || !/^\d{4}-\d{2}$/.test(to||'')) err('Укажите месяцы в формате ГГГГ-ММ.','VALIDATION');
+      if (from===to) err('Выберите разные месяцы.','VALIDATION');
+      const pt = parts && typeof parts==='object' ? parts : {};
+      const mv = v => (v===''||v===null||v===undefined) ? '' : Math.max(0, Number(v)||0); // пустое остаётся пустым
+      let copied = 0;
+      if (pt.overrides){
+        const src = db.payroll[from]||{}; db.payroll[to] = db.payroll[to]||{};
+        Object.keys(src).forEach(id => { const s = src[id]||{}; db.payroll[to][id] = { ...(db.payroll[to][id]||{}),
+          shiftAdjust: mv(s.shiftAdjust), bonus: mv(s.bonus), advance: mv(s.advance), manual: mv(s.manual) }; copied++; });
+      }
+      if (pt.kpi){
+        const src = db.payroll[from]||{}; db.payroll[to] = db.payroll[to]||{};
+        Object.keys(src).forEach(id => { const s = src[id]||{}; if (s.kpi) db.payroll[to][id] = { ...(db.payroll[to][id]||{}), kpi: JSON.parse(JSON.stringify(s.kpi)) }; });
+      }
+      if (pt.pay){
+        const src = db.pay[from]||{}; db.pay[to] = db.pay[to]||{};
+        Object.keys(src).forEach(key => { const s = src[key]||{}; db.pay[to][key] = { ...(db.pay[to][key]||{}), bonus: mv(s.bonus), manual: mv(s.manual) }; copied++; });
+      }
+      if (pt.plan && db.plans[from]!==undefined){ db.plans[to] = db.plans[from]; copied++; }
+      save(); return { ok:true, copied, payroll:db.payroll, pay:db.pay||{}, plans:db.plans };
+    },
     /* Начисление тренеру / управляющему / СММ за месяц: единая запись для «Финансов» и «Продажи и зарплата» */
     savePay({ month, key, data }, u){
       ownerOnly(u);
@@ -998,6 +1115,49 @@ function createServer(opts){
       save(); return rec;
     },
     deleteSale({ id }, u){ payrollOnly(u); db.sales = db.sales.filter(x => x.id!==id); save(); return { ok:true }; },
+    /** Импорт заказов из CSV выгрузки (orders_*.csv). Только владелец. Защита от formula injection. */
+    importFinanceOrders({ month, orders }, u){
+      ownerOnly(u);
+      if (!Array.isArray(orders) || !orders.length) err('Нет данных для импорта.','VALIDATION');
+      if (orders.length > 2000) err('Слишком много строк (макс. 2000). Разбейте файл.','VALIDATION');
+      ensureFinance(month || todayStr().slice(0,7));
+      db.sales = db.sales || [];
+      const sanitize = (val) => String(val ?? '').replace(/^[=+\-@\t\r]+/, '').trim().slice(0, 300);
+      let importedCount = 0, totalAmount = 0, skipped = 0;
+      const seen = new Set(db.sales.map(s => `${s.date}|${s.client}|${s.price}|${s.note||''}`));
+      orders.forEach(ord => {
+        const cleanClient = sanitize(ord.client);
+        const cleanComment = sanitize(ord.comment);
+        const price = Number(ord.netAmount);
+        if (!(price > 0) || ord.isRefund) { skipped++; return; }
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(ord.date) ? ord.date : todayStr();
+        const product = PRODUCT[ord.productKey] ? ord.productKey : 'other';
+        /* Ключ дедупликации должен совпадать с той заметкой, которая реально сохранится (иначе повторный импорт плодит копии) */
+        const note = cleanComment ? 'Импорт: ' + cleanComment : 'Импорт из файла заказов';
+        const key = `${date}|${cleanClient}|${price}|${note}`;
+        if (seen.has(key)) { skipped++; return; }
+        seen.add(key);
+        const newSale = {
+          id: uid('s'),
+          date,
+          client: cleanClient || 'Клиент (импорт)',
+          product,
+          price,
+          discount: Math.max(0, Number(ord.discount) || 0),
+          clientType: 'current',
+          crmTouch: false,
+          sellerId: ord.sellerId || '',
+          note,
+          createdBy: u.id,
+          createdAt: nowIso()
+        };
+        db.sales.push(newSale);
+        importedCount++;
+        totalAmount += price;
+      });
+      save();
+      return { ok: true, count: importedCount, totalAmount, skipped, sales: db.sales };
+    },
     savePayroll({ month, adminId, data }, u){
       payrollOnly(u);
       if ('manual' in data && !isOwner(u)) err('Сумму вручную задаёт владелец.');
@@ -1121,7 +1281,8 @@ const Api = {
 /* ---------- 5. АВТОРИЗАЦИЯ ---------- */
 const S = { user:null, data:null, view:'day', date:todayStr(), person:'all', level:'all', block:'all', overdueOnly:false, calMonth:todayStr().slice(0,7),
   payMonth:todayStr().slice(0,7), salMonth:todayStr().slice(0,7), finMonth:todayStr().slice(0,7), salAdmin:'', revFilter:'all', guideDraft:null, guideQuery:'',
-  expanded:{ ongoing:false }, modal:null, busy:false, lastBadges:new Map(), loginPick:'', authMode:'login' };
+  expanded:{ ongoing:false }, modal:null, busy:false, lastBadges:new Map(), loginPick:'', authMode:'login',
+  navOpen:'', /* какая группа верхней навигации раскрыта (группировка вкладок) */ salPresetKind:'staff', copyMonthFrom:'' }; /* salPresetKind — тип пресета ставок в «Продажах и зарплате» */
 
 const Auth = {
   async login(login, pass){
@@ -1224,6 +1385,10 @@ const ava = (id, sm) => { const u = userById(id) || trainerById(id); if (!u) ret
   return `<span class="ava${sm?' sm':''}${u.avatar?' emo':''}" style="background:${esc(u.color||'#E2DDF2')}" title="${esc(u.fullName||u.name)}">${u.avatar ? esc(u.avatar) : esc((u.name||'?').slice(0,1))}</span>`; };
 const avatarPicker = (cur, act, id) => `<div class="ava-pick" role="group" aria-label="Выбор аватара">${['', ...AVATARS].map(a => `<button type="button" class="ap${(cur||'')===a?' on':''}" data-act="${act}" data-a="${a}" ${id?`data-id="${id}"`:''} aria-label="${a?'Аватар '+a:'Буква имени'}">${a || 'Аб'}</button>`).join('')}</div>`;
 const pendingUsers = () => (S.data?.users||[]).filter(u => u.status==='pending');
+/* АКТИВНЫЕ СОТРУДНИКИ — единственный список для всех вкладок: при отключении (active:false)
+   человек сразу пропадает из задач, графика, отчётов, статистики, зарплаты и выплат.
+   Он остаётся только: во вкладке «Команда» (блок «Отключённые») и в истории — имя автора/исполнителя старой задачи. */
+const activeStaff = () => (S.data?.users||[]).filter(u => u.active && u.status==='active');
 
 function getTabsList(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
@@ -1233,6 +1398,47 @@ function getTabsList(){
     ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
     ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
   ];
+}
+
+/* ГРУППЫ ВЕРХНЕЙ НАВИГАЦИИ: вместо 11 вкладок подряд — 5 смысловых групп с выпадающими меню.
+   Работа — ежедневная операционка · Показатели — как идут дела · Деньги — расчёты и бюджет ·
+   База — знания студии · Команда — управление доступом.
+   Можно менять: названия групп и состав (k — ключи из getTabsList). Вкладка, скрытая ролью,
+   просто не попадает в группу; пустая группа не показывается. */
+const NAV_GROUPS = [
+  { k:'work',  label:'Работа',     tabs:['day','sched','rep','cal'] },
+  { k:'pulse', label:'Показатели', tabs:['stats','rev'] },
+  { k:'money', label:'Деньги',     tabs:['pay','sal','fin'] },
+  { k:'know',  label:'База',       tabs:['guide'] },
+  { k:'team',  label:'Команда',    tabs:['team'] }
+];
+/* Собираем группы из видимых вкладок (используется и мобильной шторкой «Ещё») */
+function getNavGroups(){
+  const tabs = getTabsList();
+  return NAV_GROUPS.map(g => ({ k:g.k, label:g.label, items:g.tabs.map(k => tabs.find(t => t[0]===k)).filter(Boolean) })).filter(g => g.items.length);
+}
+/* Стрелочка у названия группы */
+const NAV_CARET = '<svg class="caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 3.5 5 7l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function navGroupsHtml(){
+  return getNavGroups().map(g => {
+    const active = g.items.some(t => t[0]===S.view);
+    const badge = g.items.reduce((a,t) => a + (Number(t[2])||0), 0); // просрочки/заявки внутри группы — счётчик на самой группе
+    return `<div class="nav-group${active?' on':''}${S.navOpen===g.k?' open':''}" data-g="${g.k}">
+      <button type="button" class="tab grp" data-act="nav-group" data-g="${g.k}" aria-haspopup="true" aria-expanded="${S.navOpen===g.k?'true':'false'}">${esc(g.label)}${badge?`<span class="cnt">${badge}</span>`:''}${NAV_CARET}</button>
+      <div class="nav-drop" role="group" aria-label="${esc(g.label)}">
+        ${g.items.map(([k,l,c]) => `<button type="button" class="tab${S.view===k?' on':''}" role="tab" aria-selected="${S.view===k}" data-act="view" data-v="${k}">${l}${c?`<span class="cnt">${c}</span>`:''}</button>`).join('')}
+      </div></div>`;
+  }).join('');
+}
+/* Открыть/закрыть группу меню без перерисовки страницы (чтобы не терять фокус в полях) */
+function setNavOpen(k){
+  if (S.navOpen===k) return;
+  S.navOpen = k;
+  root.querySelectorAll('.nav-group').forEach(g => {
+    const on = g.dataset.g===k;
+    g.classList.toggle('open', on);
+    const grp = g.querySelector('.grp'); if (grp) grp.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
 }
 
 function updateBannersState(){
@@ -1287,12 +1493,18 @@ function switchTab(targetView){
     const overlay = root.querySelector('.sheet-o');
     if (overlay) overlay.remove();
 
-    // Верхние вкладки
-    tabsNav.querySelectorAll('.tab').forEach(b => {
+    // Верхние вкладки (группы): подсвечиваем пункт по data-v и группу, где он лежит
+    tabsNav.querySelectorAll('.tab[data-v]').forEach(b => {
       const active = b.dataset.v === S.view;
       b.classList.toggle('on', active);
       b.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    tabsNav.querySelectorAll('.nav-group').forEach(g => {
+      const active = [...g.querySelectorAll('.tab[data-v]')].some(b => b.dataset.v === S.view);
+      g.classList.toggle('on', active);
+      const grp = g.querySelector('.grp'); if (grp) grp.setAttribute('aria-expanded', active ? 'true' : 'false');
+    });
+    setNavOpen(''); // закрыть раскрытое меню при переходе
 
     // Нижняя мобильная навигация
     const bnav = root.querySelector('.bnav');
@@ -1314,6 +1526,7 @@ function switchTab(targetView){
       mainEl.innerHTML = views[S.view]();
     }
     root.querySelectorAll('input[type=range].rng').forEach(paintRange);
+    if (S.view === 'fin') bindCsvImport();
     window.scrollTo({ top: 0, behavior: 'instant' });
     return;
   }
@@ -1344,15 +1557,14 @@ function render(){
         <button class="btn sm" data-act="logout">Выйти</button>
       </div>
     </header>
-    <nav class="tabs-scroll" aria-label="Разделы"><div class="tabs" role="tablist">
-      ${tabs.map(([k,l,c]) => `<button class="tab${S.view===k?' on':''}" role="tab" aria-selected="${S.view===k}" data-act="view" data-v="${k}">${l}${c?`<span class="cnt">${c}</span>`:''}</button>`).join('')}
-    </div></nav>
+    <nav class="tabs-scroll" aria-label="Разделы"><div class="tabs nav-groups" role="tablist">${navGroupsHtml()}</div></nav>
     ${pend && S.view!=='team' ? `<div class="banner info" role="status"><div><b>Новые заявки на доступ: ${pend}.</b> <span class="muted small">Сотрудник войдёт в панель только после вашего подтверждения.</span></div><button class="btn sm primary" data-act="view" data-v="team">Посмотреть</button></div>` : ''}
     ${over && ['day','cal','stats'].includes(S.view) && !S.overdueOnly ? `<div class="banner" role="alert"><div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><div><b>Внимание: есть просроченные задачи — ${over}.</b> <span class="muted small">Невыполненное переносится на сегодня, пока его не закроют.</span></div></div><button class="btn sm" data-act="show-overdue">Показать просроченные</button></div>` : ''}
     <main>${views[S.view]()}</main>
     ${bottomNav(tabs)}
-    ${S.modal ? (S.modal.type==='more' ? moreSheet(tabs) : renderModal()) : ''}`;
+    ${S.modal ? (S.modal.type==='more' ? moreSheet() : renderModal()) : ''}`;
   root.querySelectorAll('input[type=range].rng').forEach(paintRange);
+  if (S.view === 'fin') bindCsvImport();
 }
 
 /* --- Вход и регистрация --- */
@@ -1858,7 +2070,8 @@ async function doImport(){
 function viewTeam(){
   const st = S.data.settings || {};
   const pend = pendingUsers();
-  const staff = S.data.users.filter(u => u.status==='active' || (u.status!=='pending' && u.status!=='rejected'));
+  const staff = S.data.users.filter(u => u.status==='active' && u.active);
+  const disabled = S.data.users.filter(u => u.status==='active' && !u.active);
   const rejected = S.data.users.filter(u => u.status==='rejected');
   return `<div style="display:flex;flex-direction:column;gap:18px">
     <div class="toolbar"><h2>Команда и доступ</h2></div>
@@ -1875,9 +2088,17 @@ function viewTeam(){
         <td class="small">${esc(u.phone||'—')}<br>${esc(u.email||u.login||'—')}</td>
         <td><select class="input pill" data-act="role" data-id="${u.id}" aria-label="Роль ${esc(u.name)}"${u.id===S.user.id?' disabled title="Свою роль поменяет другой владелец"':''}>${Object.entries(ROLES).map(([k,v])=>`<option value="${k}"${u.role===k?' selected':''}>${v}</option>`).join('')}</select>
           <div class="chips xs-wrap">${['admin','manager','smm'].filter(r => r!==u.role).map(r => { const on = (u.extraRoles||[]).includes(r); return `<button class="chip xs${on?' on':''}" data-act="extra-role" data-id="${u.id}" data-r="${r}" title="Совмещает должности">${on?'✓ ':'+ '}${ROLES[r].toLowerCase()}</button>`; }).join('')}</div></td>
-        <td><button class="btn sm${u.active?'':' primary'}" data-act="toggle-user" data-id="${u.id}"${u.id===S.user.id?' disabled':''}>${u.active?'Отключить':'Включить'}</button></td>
+        <td><button class="btn sm" data-act="toggle-user" data-id="${u.id}"${u.id===S.user.id?' disabled':''}>Отключить</button></td>
         <td style="white-space:nowrap"><button class="btn sm ghost" data-act="user-edit" data-id="${u.id}">Изменить</button><button class="btn sm ghost" data-act="pass" data-id="${u.id}">Пароль</button></td></tr>`).join('')}
       </tbody></table></div>
+      ${disabled.length ? `<details style="margin-top:12px"><summary class="small muted">Отключённые (${disabled.length})</summary>
+        <div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><tbody>
+        ${disabled.map(u => `<tr class="muted"><td>${esc(u.fullName||u.name)}</td>
+          <td class="small">${esc(u.phone||'—')}</td>
+          <td>${ROLES[u.role]||u.role}</td>
+          <td><button class="btn sm primary" data-act="toggle-user" data-id="${u.id}">Включить</button></td>
+          <td><button class="btn sm ghost" data-act="user-edit" data-id="${u.id}">Изменить</button></td></tr>`).join('')}
+        </tbody></table></div></details>` : ''}
       ${rejected.length ? `<p class="small muted" style="margin-top:8px">Отклонённые заявки: ${rejected.map(u => esc(u.fullName)).join(', ')}. <button class="btn ghost sm" data-act="approve" data-id="${rejected[0].id}">Восстановить первую</button></p>` : ''}
       <div class="note" style="margin-top:12px"><b>Кто что видит.</b> Владелец — всё. Совмещение (например, управляющий + администратор) добавляет права обеих должностей: человек попадает в график, отчёты и зарплату админов. Управляющий — задачи управления и команды, «Продажи и зарплата», удаляет и редактирует задачи, правит гайд и регулярные дела. Администратор — задачи команды и те, где он участник, отмечает выдачу конвертов, вносит отзывы. Любой видит задачу, если он в ней ответственный или помощник.</div>
     </div>
@@ -1904,6 +2125,22 @@ function renderModal(){
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
   if (m.type==='confirm') return `<div class="overlay" data-act="close-bg"><div class="modal" style="max-width:440px"><h3>${esc(m.title)}</h3><p class="muted">${esc(m.text)}</p>
     <div class="modal-f"><button class="btn" data-act="close">Отмена</button><button class="btn primary" data-act="confirm-yes" style="background:var(--st-over);border-color:var(--st-over);color:#fff">${esc(m.yes||'Удалить')}</button></div></div></div>`;
+  if (m.type==='confirm-chain') {
+    const isRec = !!m.task.recurringId;
+    return `<div class="overlay" data-act="close-bg">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-h"><h3>${esc(m.title)}</h3>${closeX}</div>
+        <p class="muted">${esc(m.text)}</p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin:12px 0">
+          <button class="btn" data-act="do-del-single" data-id="${m.task.id}">Удалить только эту задачу</button>
+          <button class="btn danger" data-act="do-del-chain" data-id="${m.task.id}">
+            ${isRec ? 'Удалить всю серию и будущие повторения' : 'Удалить всю цепочку связанных задач'}
+          </button>
+        </div>
+        <div class="modal-f"><button class="btn ghost" data-act="close">Отмена</button></div>
+      </div>
+    </div>`;
+  }
   if (m.type==='tpls') return tplsModal();
   if (m.type==='ntf') return notifModal();
   if (m.type==='notifyset') return notifySetModal();
@@ -1919,6 +2156,8 @@ function renderModal(){
   if (m.type==='tpl') return tplModal(m.tpl || {});
   if (m.type==='import') return importModal(m);
   if (m.type==='user') return userModal(m);
+  if (m.type==='preset') return presetModal(m);
+  if (m.type==='copymonth') return copyMonthModal();
   if (m.type==='trainer') return trainerModal(m);
   if (m.type==='sale') return saleModal(m);
   if (m.type==='penalty') return penaltyModal(m);
@@ -2182,6 +2421,7 @@ function viewSal(){
   if (!sub.some(x => x[0]===S.salTab)) S.salTab = 'pay';
   const tab = S.salTab;
   const head = `<div class="toolbar"><h2>Продажи и зарплата</h2><span class="spacer"></span>
+      ${Rules.canEditSchedule(S.user) ? `<button class="btn sm" data-act="copy-month" title="Перенести настройки зарплат из другого месяца">Скопировать месяц…</button>` : ''}
       <label class="small muted" for="f-salmonth">Месяц</label><input class="input pill" type="month" id="f-salmonth" value="${M}"></div>
     <div class="subtabs" role="tablist">${sub.map(([k,l]) => `<button class="subtab${tab===k?' on':''}" data-act="sal-tab" data-k="${k}" role="tab" aria-selected="${tab===k}">${l}</button>`).join('')}</div>`;
   let body = '';
@@ -2210,10 +2450,66 @@ function payAccrual(M, key){
 }
 function payPeople(kind){
   if (kind==='tr') return (S.data.trainers||[]).filter(t => t.active).map(t => ({ id:t.id, name:t.fullName, sub:t.note||'' }));
-  if (kind==='mgr') return S.data.users.filter(u => u.status==='active' && isManager(u) && !isOwner(u)).map(u => ({ id:u.id, name:u.fullName||u.name, sub:rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ') }));
-  return S.data.users.filter(u => u.status==='active' && hasRole(u,'smm')).map(u => ({ id:u.id, name:u.fullName||u.name, sub: rolesOf(u).length>1 ? 'совмещает: '+rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')+' — СММ оплачивается отдельно' : 'СММ' }));
+  if (kind==='mgr') return activeStaff().filter(u => isManager(u) && !isOwner(u)).map(u => ({ id:u.id, name:u.fullName||u.name, sub:rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ') }));
+  return activeStaff().filter(u => hasRole(u,'smm')).map(u => ({ id:u.id, name:u.fullName||u.name, sub: rolesOf(u).length>1 ? 'совмещает: '+rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')+' — СММ оплачивается отдельно' : 'СММ' }));
 }
 const paidTo = (M, id) => (S.data.payouts||[]).filter(p => p.recipient===id && p.issuedAt && payoutMonth(p)===M).reduce((a,p) => a + (Number(p.amount)||0), 0);
+
+/* ---------- ШАБЛОНЫ ЗАРПЛАТ: пресеты ставок и копирование месяца ----------
+   Пресет — сохранённая ставка должности (режим + сумма + % для управляющего).
+   Виден и работает у владельца и управляющего (Rules.canEditSchedule). */
+const PRESET_KINDS = { staff:{ title:'Администраторы', modes:RATE_MODES_ADMIN }, trainers:{ title:'Тренеры', modes:RATE_MODES_TRAINER }, manager:{ title:'Управляющий', modes:RATE_MODES_MANAGER }, smm:{ title:'СММ', modes:RATE_MODES_SMM } };
+const presetsOf = kind => (S.data.ratePresets||[]).filter(p => p.kind===kind);
+const presetDesc = p => { const K = PRESET_KINDS[p.kind]||{}; const m = (K.modes||{})[p.rate?.mode] || (p.rate?.mode||'');
+  return `${m}${p.rate?.amount ? ` · ${money(p.rate.amount)}` : ''}${p.kind==='manager'&&p.rate?.pct?` · ${p.rate.pct}% от выручки`:''}`; };
+/* Кому применяется пресет: все активные сотрудники должности (отключённые не трогаем) */
+function presetTargets(kind){
+  if (kind==='staff') return activeStaff().filter(u => isAdminRole(u) && !isOwner(u)).map(u => u.id);
+  if (kind==='trainers') return (S.data.trainers||[]).filter(t => t.active).map(t => t.id);
+  return payPeople(kind).map(p => p.id);
+}
+/* Ставка первого в списке — предзаполняет новый пресет текущими значениями */
+function presetPrefill(kind){
+  const id = presetTargets(kind)[0]; if (!id) return null;
+  const rk = kind==='staff' ? 'staff' : kind;
+  return { ...PAY_DEFAULT[kind==='staff' ? 'tr' : kind], ...((((S.data.rates||{})[rk])||{})[id] || {}) };
+}
+/* Панель пресетов над таблицей начислений или в карточке ставок */
+function presetBar(kind){
+  const list = presetsOf(kind);
+  return `<div class="preset-bar"><span class="small muted">Пресет ставки:</span>
+    <select class="input pill" id="preset-sel" aria-label="Пресет ставок для ${esc(PRESET_KINDS[kind].title.toLowerCase())}">
+      <option value="">— выберите —</option>${list.map(p => `<option value="${p.id}">${esc(p.name)} · ${esc(presetDesc(p))}</option>`).join('')}</select>
+    <button type="button" class="btn sm" data-act="preset-apply" data-kind="${kind}"${list.length?'':' disabled'} title="Проставить выбранную ставку всем активным сотрудникам должности">Применить ко всем</button>
+    <button type="button" class="btn sm" data-act="preset-edit" data-kind="${kind}" data-id="">+ Пресет из текущей ставки</button>
+    ${list.length?`<button type="button" class="btn sm ghost" data-act="preset-edit" data-kind="${kind}" data-id="${list[0].id}">Изменить пресет</button>`:''}</div>`;
+}
+function presetModal(m){
+  const K = PRESET_KINDS[m.kind];
+  const p = m.id ? ((S.data.ratePresets||[]).find(x => x.id===m.id) || {}) : (m.prefill || {});
+  return `<div class="overlay" data-act="close-bg"><form class="modal" id="preset-form" data-kind="${m.kind}" data-id="${m.id||''}" style="max-width:440px">
+    <div class="modal-h"><h3>${m.id?'Пресет ставки':'Новый пресет ставки'} · ${K.title}</h3>${closeX}</div>
+    <div class="field"><label for="ps-n">Название</label><input class="input" id="ps-n" value="${esc(p.name||'')}" required maxlength="60" placeholder="Например: Смена по договору"></div>
+    <div class="field"><label for="ps-mode">Как платим</label><select class="input" id="ps-mode">${Object.entries(K.modes).map(([k,v]) => `<option value="${k}"${p.mode===k?' selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="grid2"><div class="field"><label for="ps-amount">Сумма, ₽</label><input class="input num" id="ps-amount" type="number" min="0" step="100" inputmode="numeric" value="${p.amount??''}" placeholder="0"></div>
+    ${m.kind==='manager' ? `<div class="field"><label for="ps-pct">% от выручки</label><input class="input num" id="ps-pct" type="number" min="0" max="100" step="0.5" inputmode="decimal" value="${p.pct??''}" placeholder="0"></div>` : ''}</div>
+    <p class="small muted">«Применить ко всем» проставит эту ставку всем активным сотрудникам должности. Отключённые не затрагиваются.</p>
+    <div class="modal-f">${m.id?`<button type="button" class="btn danger" data-act="preset-del" data-id="${m.id}" data-kind="${m.kind}">Удалить</button>`:''}<span class="spacer"></span><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
+}
+function copyMonthModal(){
+  const M = S.salMonth;
+  const months = []; for (let i=1;i<=12;i++){ const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-i); months.push(ymd(d).slice(0,7)); }
+  return `<div class="overlay" data-act="close-bg"><form class="modal" id="copymonth-form" style="max-width:470px">
+    <div class="modal-h"><h3>Скопировать месяц</h3>${closeX}</div>
+    <p class="small muted">Переносит настройки зарплат из выбранного месяца в ${monthName(M).toLowerCase()} — чтобы не заполнять всё заново. Количества занятий и публикаций не переносятся — только настройки и суммы.</p>
+    <div class="field"><label for="cm-from">Откуда (месяц)</label><select class="input" id="cm-from">${months.map(m => `<option value="${m}"${m===S.copyMonthFrom?' selected':''}>${monthName(m)}</option>`).join('')}</select></div>
+    <div class="field"><span class="small muted" style="font-weight:600">Что скопировать</span>
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="cm-overrides" checked style="accent-color:var(--accent)"> Корректировки, премии, авансы и ручные суммы админов</label>
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="cm-kpi" checked style="accent-color:var(--accent)"> Значения KPI</label>
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="cm-pay" checked style="accent-color:var(--accent)"> Премии и ручные суммы тренерам, управляющему, СММ</label>
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="cm-plan" checked style="accent-color:var(--accent)"> План продаж</label></div>
+    <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Скопировать</button></div></form></div>`;
+}
 function payKindScreen(kind, M){
   const K = PAY_KINDS[kind]; const people = payPeople(kind);
   if (!people.length) return `<div class="empty">${kind==='smm' ? 'В команде нет никого с ролью СММ. Добавьте роль во вкладке «Команда».' : kind==='mgr' ? 'Нет управляющего.' : 'Нет тренеров.'}</div>`;
@@ -2221,6 +2517,7 @@ function payKindScreen(kind, M){
   const total = rows.reduce((x,r) => x + r.a.sum, 0), paid = rows.reduce((x,r) => x + r.paid, 0);
   const unitsCol = kind!=='mgr';
   return `<div class="card"><div class="card-h"><h3>${K.title} · ${monthName(M).toLowerCase()}</h3><span class="small muted">начислено ${money(total)} · выдано ${money(paid)}</span></div>
+    ${presetBar(kind)}
     <div class="tbl-wrap"><table class="tbl pay-tbl"><thead><tr><th>Сотрудник</th><th>Как платим</th><th class="r">Ставка, ₽</th>${kind==='mgr'?'<th class="r">% от выручки</th>':''}${unitsCol?`<th class="r">${K.unit}</th>`:''}<th class="r">Премия</th><th class="r">Сумма вручную</th><th class="r">Начислено</th><th class="r">Выдано</th><th></th></tr></thead><tbody>
     ${rows.map(({pp,a,paid}) => { const showUnits = unitsCol && a.rate.mode!=='fixed'; return `<tr><td><b>${esc(pp.name)}</b>${pp.sub?`<div class="small muted">${esc(pp.sub)}</div>`:''}</td>
       <td><select class="input pill" data-prate="${kind}" data-id="${pp.id}" data-f="mode" aria-label="Как платим ${esc(pp.name)}">${Object.entries(K.modes).map(([k,v]) => `<option value="${k}"${a.rate.mode===k?' selected':''}>${v}</option>`).join('')}</select></td>
@@ -2258,6 +2555,7 @@ function payrollScreen(M, admins){
     <div class="sum-line"><span>Смен за месяц: <b>${String(c.nShifts).replace('.',',')}</b>${c.nShifts<KPI_MIN_SHIFTS?` · для KPI нужно не меньше ${KPI_MIN_SHIFTS}`:''}</span><span>Фиксированная часть: <b>${money(c.fixed)}</b></span></div>
     <p class="small muted">Тип считается по времени: начало раньше 08:30 — расширенное утро, конец позже 21:30 — расширенный вечер, оба — полный период. Половина смены оплачивается по коэффициенту ${String(c.rates.halfFactor).replace('.',',')}. Если доплату не положено платить (не было записи на 08:00 / 21:00), поменяйте время или тип смены в графике.</p></div>`;
   const ratesCard = canRates ? `<div class="card"><div class="card-h"><h3>Ставки за смену</h3><span class="small muted">для всех администраторов</span></div>
+    ${presetBar('staff')}
     <div class="rates">${SHIFT_TYPES.map(t => `<label><span>${t.name}<span class="small muted"> ${t.time}</span></span><input class="input num" type="number" min="0" step="50" inputmode="numeric" data-rate="${t.k}" value="${c.rates[t.k]}"></label>`).join('')}
       <label><span>Половина смены, доля от ставки</span><input class="input num" type="number" min="0" max="1" step="0.05" data-rate="halfFactor" value="${c.rates.halfFactor}"></label></div>
     <p class="small muted">По договору: 2 000 / 2 300 / 2 350 / 2 650 ₽. Изменения сразу пересчитывают зарплату за все месяцы, где нет ручной корректировки.</p></div>` : '';
@@ -2310,7 +2608,7 @@ function salesJournal(M){
   const list = salesOf(M, f==='all'?'':f).sort((a,b) => b.date.localeCompare(a.date));
   const total = list.reduce((a,s) => a+s.price, 0);
   const byLine = {}; list.forEach(s => { const k = PRODUCT[s.product]?.name || s.product; byLine[k] = (byLine[k]||0) + s.price; });
-  const sellers = S.data.users.filter(u => u.status==='active' && (isAdminRole(u) || isManager(u)));
+  const sellers = activeStaff().filter(u => isAdminRole(u) || isManager(u)); // отключённые продавцы в списках не показываются
   return `<div class="card"><div class="card-h"><h3>Журнал продаж</h3><div class="toolbar">
       ${sel('f-seller','Продавец', `<option value="all">Все продавцы</option>${sellers.map(u => `<option value="${u.id}"${f===u.id?' selected':''}>${esc(u.name)}</option>`).join('')}`)}
       <button class="btn primary sm" data-act="sale-edit" data-id="">+ Продажа</button></div></div>
@@ -2341,7 +2639,7 @@ function penaltiesJournal(M){
 function saleModal(m){
   const s = (S.data.sales||[]).find(x => x.id===m.id) || { date: S.salMonth===todayStr().slice(0,7) ? todayStr() : S.salMonth+'-01', product:'ab8', price:PRODUCT.ab8.price, clientType:'new', crmTouch:false, sellerId:m.seller||'', discount:0, client:'', note:'' };
   const c = commission(s);
-  const sellers = S.data.users.filter(u => u.status==='active' && (isAdminRole(u) || isManager(u)));
+  const sellers = activeStaff().filter(u => isAdminRole(u) || isManager(u)); // отключённые продавцы в списках не показываются
   return `<div class="overlay" data-act="close-bg"><form class="modal" id="sale-form" data-id="${esc(s.id||'')}" style="max-width:620px"><div class="modal-h"><h3>${s.id?'Продажа':'Новая продажа'}</h3>${closeX}</div>
     <div class="grid2"><div class="field"><label for="sf-date">Дата</label><input class="input" id="sf-date" type="date" value="${s.date}" required></div>
       <div class="field"><label for="sf-client">Клиент</label><input class="input" id="sf-client" value="${esc(s.client)}" placeholder="Имя или номер карты"></div></div>
@@ -2384,7 +2682,7 @@ function calcFinance(M){
   // ФОТ: одна сумма начисления на человека и должность — та же, что в «Продажи и зарплата». Выданное по журналу — для контроля
   const paid = {}; (S.data.payouts||[]).filter(p => p.issuedAt && payoutMonth(p)===M).forEach(p => { paid[p.recipient] = (paid[p.recipient]||0) + (Number(p.amount)||0); });
   const fotRows = [];
-  S.data.users.filter(u => u.status==='active' && !isOwner(u) && isAdminRole(u)).forEach(u => { const c = calcPayroll(M, u.id); fotRows.push({ key:'adm:'+u.id, pid:u.id, name:u.fullName||u.name, role:'Администратор', how: c.mode==='contract'?'по договору':c.mode==='shift'?'только смены':'фикс в месяц', sum:c.net, calc:c.calcNet ?? c.net, manual:c.manualSet ? c.net : null }); });
+  activeStaff().filter(u => !isOwner(u) && isAdminRole(u)).forEach(u => { const c = calcPayroll(M, u.id); fotRows.push({ key:'adm:'+u.id, pid:u.id, name:u.fullName||u.name, role:'Администратор', how: c.mode==='contract'?'по договору':c.mode==='shift'?'только смены':'фикс в месяц', sum:c.net, calc:c.calcNet ?? c.net, manual:c.manualSet ? c.net : null }); });
   ['mgr','smm','tr'].forEach(kind => payPeople(kind).forEach(pp => { const a = payAccrual(M, `${kind}:${pp.id}`);
     fotRows.push({ key:a.key, pid:pp.id, name:pp.name, role:{ mgr:'Управляющий', smm:'СММ', tr:'Тренер' }[kind], how: PAY_KINDS[kind].modes[a.rate.mode] + (a.rate.amount ? ` · ${money(a.rate.amount)}` : ''), sum:a.sum, calc:a.calc, manual:a.manual, kind }); }));
   const byPerson = {}; fotRows.forEach(r => { byPerson[r.pid] = (byPerson[r.pid]||0) + r.sum; });
@@ -2398,12 +2696,14 @@ function calcFinance(M){
   const tax = Math.round(incomeTotal * (Number(f.taxRate)||0) / 100);
   const expensesTotal = fot.accrued + otherPaid + fixedTotal + purchasesTotal + utilitiesTotal + customTotal + tax;
   const profit = incomeTotal - expensesTotal;
-  const personal = { u1:0, u2:0 }; [...(f.purchases||[]), ...(f.utilities||[]), ...(f.custom||[])].forEach(i => { if (personal[i.payer]!==undefined) personal[i.payer] += Number(i.amount)||0; });
+  /* Собственники — динамический список (в демо — Влад и Катя). Свои средства/операции считаем по каждому. */
+  const owners = (S.data.users||[]).filter(u => isOwner(u)).map(u => ({ id:u.id, name:u.name, active:u.active && u.status==='active' }));
+  const personal = {}; owners.forEach(o => { personal[o.id] = 0; }); [...(f.purchases||[]), ...(f.utilities||[]), ...(f.custom||[])].forEach(i => { if (personal[i.payer]!==undefined) personal[i.payer] += Number(i.amount)||0; });
   const ops = f.ownerOps||[]; const opSum = (o,t) => ops.filter(x => x.owner===o && x.type===t).reduce((s,x) => s+(Number(x.amount)||0), 0);
-  const dividends = opSum('u1','div') + opSum('u2','div');
+  const dividends = owners.reduce((a,o) => a + opSum(o.id,'div'), 0);
   const debtBal = (S.data.debt||[]).reduce((x,d) => x + (d.type==='loan' ? d.amount : -d.amount), 0);
   return { f, cfg, income, incomeTotal, fotRows, paid, fot, otherPaid, fixed, fixedTotal, purchasesTotal, utilitiesTotal, customTotal, tax, expensesTotal, profit,
-    personal, ops, opSum, dividends, remainder: profit - dividends, debtBal, salesCount: sales.length };
+    personal, ops, opSum, owners, dividends, remainder: profit - dividends, debtBal, salesCount: sales.length };
 }
 const numIn = (path, val, label, ph) => `<input class="input num money-in" type="number" step="1" inputmode="numeric" data-fin="${path}" value="${val||''}" placeholder="${ph??0}" aria-label="${esc(label)}">`;
 const rateText = r => !r || !r.amount && r.mode!=='contract' ? '<span class="muted">ставка не задана</span>' : r.mode==='perClass' ? `${money(r.amount)} за занятие` : r.mode==='fixed' ? `${money(r.amount)} в месяц` : 'по договору';
@@ -2413,10 +2713,10 @@ function finList(kind, title, items, hint, withPayer){
   return `<div class="card"><div class="card-h"><h3>${title}</h3><span class="small muted num">${money((items||[]).reduce((x,i)=>x+(Number(i.amount)||0),0))}</span></div>
     ${hint?`<p class="small muted">${hint}</p>`:''}
     ${(items||[]).length ? `<div class="tbl-wrap"><table class="tbl"><tbody>${items.map(i => `<tr><td>${esc(i.name)}${i.date?`<div class="small muted">${fmtDay(i.date)}</div>`:''}</td>
-      ${withPayer?`<td class="small">${PAYERS[i.payer]||'Студия'}</td>`:''}<td class="r"><b>${money(i.amount)}</b></td>${ed?`<td class="r"><button class="btn ghost sm" data-act="fin-del" data-kind="${kind}" data-id="${i.id}" aria-label="Удалить">✕</button></td>`:''}</tr>`).join('')}</tbody></table></div>` : '<p class="muted small">Пока пусто.</p>'}
+      ${withPayer?`<td class="small">${esc(payerName(i.payer))}</td>`:''}<td class="r"><b>${money(i.amount)}</b></td>${ed?`<td class="r"><button class="btn ghost sm" data-act="fin-del" data-kind="${kind}" data-id="${i.id}" aria-label="Удалить">✕</button></td>`:''}</tr>`).join('')}</tbody></table></div>` : '<p class="muted small">Пока пусто.</p>'}
     <form class="fin-add" data-kind="${kind}"><input class="input" name="name" placeholder="Наименование" required aria-label="Наименование"><input class="input" name="date" type="date" value="${todayStr().slice(0,7)===S.finMonth?todayStr():S.finMonth+'-01'}" aria-label="Дата">
       <input class="input num" name="amount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма" required aria-label="Сумма">
-      ${withPayer?`<select class="input" name="payer" aria-label="Кто оплатил">${Object.entries(PAYERS).map(([k,v]) => `<option value="${k}">${v}</option>`).join('')}</select>`:''}<button class="btn sm primary" type="submit">Добавить</button></form></div>`;
+      ${withPayer?`<select class="input" name="payer" aria-label="Кто оплатил">${payersList().map(p => `<option value="${p.k}">${esc(p.name)}</option>`).join('')}</select>`:''}<button class="btn sm primary" type="submit">Добавить</button></form></div>`;
 }
 
 function viewFin(){
@@ -2462,14 +2762,15 @@ function viewFin(){
     <dl class="totals"><dt>Доходы</dt><dd>${money(c.incomeTotal)}</dd><dt>Расходы</dt><dd>−${money(c.expensesTotal)}</dd>
       <dt class="grand">${c.profit>=0?'Прибыль':'Убыток'} месяца</dt><dd class="grand" style="color:${c.profit>=0?'var(--st-done)':'var(--st-over)'}">${money(c.profit)}</dd></dl>
     ${c.fot.accrued > c.fot.paid ? `<p class="small muted">Из начисленных зарплат ещё не выдано ${money(c.fot.accrued - c.fot.paid)}.</p>` : ''}</div>`;
-  const ownersCard = `<div class="card"><div class="card-h"><h3>4. Средства собственников</h3></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Операция</th><th class="r">Влад</th><th class="r">Катя</th></tr></thead><tbody>
-      <tr><td>Внесено средств в студию</td><td class="r">${money(c.opSum('u1','in'))}</td><td class="r">${money(c.opSum('u2','in'))}</td></tr>
-      <tr><td>Выведено дивидендов</td><td class="r">${money(c.opSum('u1','div'))}</td><td class="r">${money(c.opSum('u2','div'))}</td></tr>
-      <tr><td>Оплачено из личных средств</td><td class="r">${money(c.personal.u1)}</td><td class="r">${money(c.personal.u2)}</td></tr>
-      <tr class="sum"><td>Итого остаток в студии</td><td class="r" colspan="2">${money(c.remainder)}</td></tr></tbody></table></div>
+  const ownerHead = c.owners.map(o => `<th class="r">${esc(o.name)}</th>`).join('');
+  const ownerOpsCard = `<div class="card"><div class="card-h"><h3>4. Средства собственников</h3></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Операция</th>${ownerHead}</tr></thead><tbody>
+      <tr><td>Внесено средств в студию</td>${c.owners.map(o => `<td class="r">${money(c.opSum(o.id,'in'))}</td>`).join('')}</tr>
+      <tr><td>Выведено дивидендов</td>${c.owners.map(o => `<td class="r">${money(c.opSum(o.id,'div'))}</td>`).join('')}</tr>
+      <tr><td>Оплачено из личных средств</td>${c.owners.map(o => `<td class="r">${money(c.personal[o.id])}</td>`).join('')}</tr>
+      <tr class="sum"><td>Итого остаток в студии</td><td class="r" colspan="${c.owners.length}">${money(c.remainder)}</td></tr></tbody></table></div>
     ${(c.ops||[]).length ? `<div class="chips" style="margin-top:8px">${c.ops.map(o => `<span class="tag">${fmtDayShort(o.date)} · ${esc(nameOf(o.owner))} · ${o.type==='in'?'внёс':'дивиденды'} ${money(o.amount)}${ed?` <button class="btn ghost sm" style="min-height:0;padding:0 4px" data-act="fin-del" data-kind="ownerOps" data-id="${o.id}" aria-label="Удалить">✕</button>`:''}</span>`).join('')}</div>` : ''}
-    <form class="fin-add" data-kind="ownerOps"><select class="input" name="owner" aria-label="Кто"><option value="u1">Влад</option><option value="u2">Катя</option></select>
+    <form class="fin-add" data-kind="ownerOps"><select class="input" name="owner" aria-label="Кто">${c.owners.filter(o => o.active).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
       <select class="input" name="type" aria-label="Операция"><option value="in">Внёс в студию</option><option value="div">Вывел дивиденды</option></select>
       <input class="input" name="date" type="date" value="${todayStr()}" aria-label="Дата"><input class="input num" name="amount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма" required aria-label="Сумма"><button class="btn sm primary" type="submit">Добавить</button></form></div>`;
   const debt = (S.data.debt||[]).slice().sort((a,b) => a.date.localeCompare(b.date)); let run = 0;
@@ -2477,8 +2778,8 @@ function viewFin(){
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Кто</th><th>Операция</th><th class="r">Сумма</th><th class="r">Остаток долга</th>${ed?'<th></th>':''}</tr></thead><tbody>
     ${debt.map(d => { run += d.type==='loan' ? d.amount : -d.amount; return `<tr><td class="num">${fmtDayShort(d.date)}.${d.date.slice(2,4)}</td><td>${esc(nameOf(d.owner))}</td><td>${d.type==='loan'?'Вложил(а) в студию':'Студия вернула'}${d.note?`<div class="small muted">${esc(d.note)}</div>`:''}</td>
       <td class="r" style="color:${d.type==='loan'?'var(--st-over)':'var(--st-done)'}">${d.type==='loan'?'+':'−'}${money(d.amount)}</td><td class="r"><b>${money(run)}</b></td>${ed?`<td class="r"><button class="btn ghost sm" data-act="debt-del" data-id="${d.id}" aria-label="Удалить">✕</button></td>`:''}</tr>`; }).join('')}</tbody></table></div>
-    ${(c.personal.u1||c.personal.u2) ? `<div class="note">В этом месяце из личных средств оплачено: Влад ${money(c.personal.u1)}, Катя ${money(c.personal.u2)}. <button class="btn sm" data-act="debt-from-personal">Добавить в долг студии</button></div>` : ''}
-    <form class="fin-add" id="debt-form"><select class="input" name="owner" aria-label="Кто"><option value="u1">Влад</option><option value="u2">Катя</option></select>
+    ${(c.owners||[]).some(o => c.personal[o.id]) ? `<div class="note">В этом месяце из личных средств оплачено: ${c.owners.filter(o => c.personal[o.id]).map(o => `${esc(o.name)} ${money(c.personal[o.id])}`).join(', ')}. <button class="btn sm" data-act="debt-from-personal">Добавить в долг студии</button></div>` : ''}
+    <form class="fin-add" id="debt-form"><select class="input" name="owner" aria-label="Кто">${c.owners.filter(o => o.active).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
       <select class="input" name="type" aria-label="Операция"><option value="loan">Вложил(а) в студию</option><option value="repay">Студия вернула</option></select>
       <input class="input" name="date" type="date" value="${todayStr()}" aria-label="Дата"><input class="input num" name="amount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма" required aria-label="Сумма">
       <input class="input" name="note" placeholder="Комментарий" aria-label="Комментарий"><button class="btn sm primary" type="submit">Добавить</button></form></div>`;
@@ -2486,10 +2787,22 @@ function viewFin(){
     <div class="toolbar"><h2>Финансы</h2><span class="tag lvl-owners">видят только владельцы</span><span class="spacer"></span>
       <label class="small muted" for="f-finmonth">Месяц</label><input class="input pill" type="month" id="f-finmonth" value="${M}"></div>
     <div class="bigkpis">${tile('Доходы', c.incomeTotal, monthName(M))}${tile('Расходы', c.expensesTotal, 'вкл. зарплаты и налоги')}${tile(c.profit>=0?'Прибыль':'Убыток', c.profit, 'доходы − расходы', c.profit>=0?'var(--st-done)':'var(--st-over)')}${tile('Долг студии', c.debtBal, 'перед собственниками', c.debtBal>0?'var(--st-over)':'')}</div>
-    <div class="fin-grid"><div class="fin-col">${incomeCard}${resCard}${ownersCard}</div><div class="fin-col">${expCard}</div></div>
+    <div class="fin-grid"><div class="fin-col">${incomeCard}${resCard}${ownerOpsCard}</div><div class="fin-col">${expCard}</div></div>
     <div class="fin-grid three">${finList('purchases','Закупки товаров и расходников', c.f.purchases, 'Если платили из своих — выберите, кто.', true)}
       ${finList('utilities','Коммуналка и сервисы', c.f.utilities, 'Переносятся в следующий месяц автоматически.', true)}
       ${finList('custom','Затраты собственников', c.f.custom, 'Ваши личные траты на студию.', true)}</div>
+    <div class="card">
+      <div class="card-h">
+        <h3>Загрузка заказов из CSV</h3>
+        <span class="small muted">выгрузка orders_YYYYMMDD_HHMMSS.csv</span>
+      </div>
+      <div class="dropzone" id="csv-dropzone" role="button" tabindex="0" style="padding:20px;text-align:center;cursor:pointer;border:2px dashed var(--border);border-radius:12px;background:var(--bg-soft)">
+        <b>Выберите или перетащите файл заказов (.csv)</b>
+        <div class="small muted" style="margin-top:6px">Например: orders_20261029_164741.csv · разделитель «;»</div>
+        <input type="file" id="csv-file-input" accept=".csv,text/csv" hidden>
+      </div>
+      <div id="csv-preview-area" style="margin-top:12px"></div>
+    </div>
     ${debtCard}</div>`;
 }
 
@@ -2727,10 +3040,11 @@ function bottomNav(tabs){
     <button class="bn" data-act="ntf"><span class="bi" aria-hidden="true">🔔</span><span>Уведомл.</span>${unreadCount()?`<span class="cnt">${unreadCount()}</span>`:''}</button>
     <button class="bn${more.some(t=>t[0]===S.view)?' on':''}" data-act="more"><span class="bi" aria-hidden="true">☰</span><span>Ещё</span></button></nav>`;
 }
-function moreSheet(tabs){
-  const more = tabs.filter(t => !['day','sched','rep'].includes(t[0]));
+function moreSheet(){
+  /* На телефоне шторка «Ещё» повторяет те же группы, что и верхнее меню на компьютере */
+  const groups = getNavGroups().map(g => ({ ...g, items:g.items.filter(t => !['day','sched','rep'].includes(t[0])) })).filter(g => g.items.length);
   return `<div class="overlay sheet-o" data-act="close-bg"><div class="sheet"><div class="grab" aria-hidden="true"></div>
-    ${more.map(([k,l,c]) => `<button class="sheet-i${S.view===k?' on':''}" data-act="view" data-v="${k}">${l}${c?`<span class="cnt">${c}</span>`:''}</button>`).join('')}
+    ${groups.map(g => `<div class="sheet-g">${esc(g.label)}</div>${g.items.map(([k,l,c]) => `<button class="sheet-i${S.view===k?' on':''}" data-act="view" data-v="${k}">${l}${c?`<span class="cnt">${c}</span>`:''}</button>`).join('')}`).join('')}
     <button class="sheet-i" data-act="notifyset">Мои уведомления и установка на iPhone</button><button class="sheet-i" data-act="logout">Выйти</button></div></div>`;
 }
 const unreadCount = () => { const r = getRead(); return computeNotifications().filter(n => !r.has(n.id)).length; };
@@ -2790,6 +3104,144 @@ async function downloadPdf(kind){
   await window.html2pdf().set({ margin:10, filename:name, html2canvas:{ scale:2, backgroundColor:'#ffffff' }, jsPDF:{ unit:'mm', format:'a4', orientation:'landscape' } }).from(el).save();
 }
 
+/** Парсер CSV выгрузки заказов студии (разделитель ;, кавычки, RU-даты и числа). */
+function parseOrdersCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (lines.length < 2) return [];
+  const matchProduct = (name) => {
+    /* Полное сопоставление «Состав продажи» из выгрузки orders_*.csv со справочником PRODUCTS.
+       Порядок важен: сначала специфичные («утренний», «коммерческ», «беременн»),
+       потом номера абонементов (16 раньше 8/6/4), в конце — разовые. */
+    const s = String(name || '').toLowerCase();
+    if (s.includes('супер знакомство')) return 'trial_super';
+    if (s.includes('знакомство')) return 'trial';                // «Знакомство» и «Индивидуальное знакомство» — пробные
+    if (s.includes('утренн')) return 'morning8';                 // «Утренний абонемент на 8 групповых занятий»
+    if (s.includes('безлимит')) return s.includes('дневн') ? 'dayunlim' : 'unlim';
+    if (s.includes('коммерческ')) return 'commercial';           // абонементы на коммерческие классы
+    if (s.includes('беременн')) return 'pregnant';
+    if (s.includes('медитац') || s.includes('звуков') || s.includes('чаш')) return 'sound';
+    if (s.includes('фитмост') || s.includes('fitmost')) return 'fitmost';
+    if (s.includes('аренда')) return 'rent';
+    if (s.includes('носочк') || s.includes('полотенц') || s.includes('коврик') || s.includes('одежд') || s.includes('товар')) return 'goods';
+    if (s.includes('заморозк')) return 'freeze';
+    if (s.includes('индивидуальн') || s.includes('персональн') || s.includes('сплит')) return 'personal';
+    if (s.includes('16')) return 'ab16';                         // проверяем раньше 6 — иначе «на 16» поймается как «на 6»
+    if (s.includes('8')) return 'ab8';
+    if (s.includes('6')) return 'ab6';
+    if (s.includes('4')) return 'ab4';
+    if (s.includes('разовое')) return 'single';
+    return 'other'; // «БЕСПЛАТНО», «Чайная церемония» и прочее — попадает в «Прочие продажи из журнала»
+  };
+  const parseNum = v => parseFloat(String(v || '0').replace(/\s+/g, '').replace(',', '.')) || 0;
+  const result = [];
+  for (let i = 1; i < lines.length; i++) {
+    // Простой парсер с учётом кавычек и ;
+    const row = [];
+    let cur = '', inQ = false;
+    const line = lines[i];
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === '"') { inQ = !inQ; continue; }
+      if (ch === ';' && !inQ) { row.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    row.push(cur);
+    const clean = row.map(c => c.replace(/^"|"$/g, '').trim());
+    if (clean.length < 6) continue;
+    const dateRaw = clean[0] || '';
+    let isoDate = todayStr();
+    if (dateRaw.includes('.')) {
+      const [dPart] = dateRaw.split(' ');
+      const parts = dPart.split('.');
+      if (parts.length === 3) isoDate = `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+    }
+    const amount = parseNum(clean[2]);
+    const discount = parseNum(clean[3]);
+    const refund = parseNum(clean[8]);
+    const isRefund = !!(clean[7] && clean[7] !== '-');
+    const net = amount - refund;
+    const sellerName = (clean[6] || '').trim();
+    /* Продавца сопоставляем с сотрудниками панели: по фамилии (первое слово ФИО из выгрузки)
+       или по полному совпадению имени. «-» и пустые — продажа без продавца. */
+    const sur = sellerName.split(' ')[0].toLowerCase();
+    const seller = sellerName && sellerName !== '-' ? (S.data.users || []).find(u => {
+      const fn = String(u.fullName || '').toLowerCase(), nm = String(u.name || '').toLowerCase();
+      return (sur.length > 2 && fn.includes(sur)) || (sellerName.toLowerCase() === nm);
+    }) : null;
+    result.push({
+      date: isoDate,
+      client: clean[1],
+      amount,
+      discount,
+      netAmount: net,
+      isRefund,
+      productKey: matchProduct(clean[5]),
+      itemsName: clean[5],
+      sellerId: seller ? seller.id : '',
+      comment: clean[10] || ''
+    });
+  }
+  return result;
+}
+
+function bindCsvImport() {
+  const zone = document.getElementById('csv-dropzone');
+  const input = document.getElementById('csv-file-input');
+  const preview = document.getElementById('csv-preview-area');
+  if (!zone || !input || !preview) return;
+  const open = () => input.click();
+  zone.onclick = open;
+  zone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+  zone.ondragover = e => { e.preventDefault(); zone.classList.add('drag'); };
+  zone.ondragleave = () => zone.classList.remove('drag');
+  zone.ondrop = e => {
+    e.preventDefault(); zone.classList.remove('drag');
+    const f = e.dataTransfer?.files?.[0];
+    if (f) handleCsvFile(f, preview);
+  };
+  input.onchange = () => { if (input.files?.[0]) handleCsvFile(input.files[0], preview); input.value = ''; };
+}
+
+function handleCsvFile(file, preview) {
+  if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') {
+    toast('Нужен файл .csv', true); return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const orders = parseOrdersCSV(String(reader.result || ''));
+      if (!orders.length) { preview.innerHTML = '<p class="muted">В файле нет подходящих строк.</p>'; return; }
+      const total = orders.reduce((a, o) => a + (o.netAmount > 0 && !o.isRefund ? o.netAmount : 0), 0);
+      const valid = orders.filter(o => o.netAmount > 0 && !o.isRefund);
+      const unknown = [...new Set(valid.filter(o => !PRODUCT[o.productKey]).map(o => o.itemsName))];
+      preview.innerHTML = `
+        <div class="note">Найдено строк: <b>${orders.length}</b>, к импорту: <b>${valid.length}</b> на сумму <b>${money(total)}</b>.
+          Возвраты, бесплатные (0 ₽) и дубликаты (та же дата+клиент+сумма) пропускаются.
+          ${unknown.length ? `<b>Нераспознанные позиции</b> (попадут в «Прочие продажи из журнала»): ${esc(unknown.join('; '))}.` : 'Все позиции распознаны.'}</div>
+        <div class="tbl-wrap" style="max-height:220px;overflow:auto;margin:8px 0">
+          <table class="tbl"><thead><tr><th>Дата</th><th>Клиент</th><th>Товар</th><th class="r">Сумма</th><th>Продавец</th></tr></thead>
+          <tbody>${valid.slice(0, 30).map(o => `<tr>
+            <td class="num">${fmtDayShort(o.date)}</td><td>${esc(o.client)}</td>
+            <td class="small">${esc(o.itemsName||o.productKey)}</td>
+            <td class="r">${money(o.netAmount)}</td>
+            <td class="small">${esc(nameOf(o.sellerId) || '—')}</td></tr>`).join('')}
+          ${valid.length > 30 ? `<tr><td colspan="5" class="muted small">… и ещё ${valid.length - 30}</td></tr>` : ''}
+          </tbody></table></div>
+        <div class="toolbar">
+          <button class="btn primary" data-act="csv-import-confirm" id="csv-import-btn">Импортировать в журнал продаж</button>
+          <button class="btn ghost" data-act="csv-import-cancel">Отмена</button>
+        </div>`;
+      // store for confirm
+      S._csvOrders = valid;
+      S._csvMonth = S.finMonth || todayStr().slice(0, 7);
+    } catch (e) {
+      preview.innerHTML = `<p class="muted" style="color:var(--st-over)">Ошибка разбора: ${esc(e.message)}</p>`;
+    }
+  };
+  reader.onerror = () => toast('Не удалось прочитать файл', true);
+  reader.readAsText(file, 'UTF-8');
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 9 · КНОПКИ И ФОРМЫ
    Что делает:   что происходит при нажатии кнопок и отправке форм. Каждое действие — строка case 'имя-действия'.
@@ -2846,6 +3298,8 @@ root.addEventListener('click', e => {
     case 'reset-demo': S.modal = { type:'confirm', title:'Сбросить демо-данные?', text:'Все изменения в прототипе удалятся, вернутся задачи из ваших таблиц.', yes:'Сбросить', on: async () => { DemoServer.reset(); await loadAll(); toast('Демо-данные восстановлены'); } }; render(); break;
     /* навигация */
     case 'view': switchTab(el.dataset.v); break;
+    /* группа верхнего меню: раскрыть/свернуть (пункты внутри — обычный 'view') */
+    case 'nav-group': setNavOpen(S.navOpen===el.dataset.g ? '' : el.dataset.g); break;
     case 'show-overdue': S.view='day'; S.overdueOnly=true; render(); break;
     case 'hide-overdue': S.overdueOnly=false; render(); break;
     case 'day-shift': S.date = addDays(S.date, Number(el.dataset.n)); S.overdueOnly=false; render(); break;
@@ -2866,10 +3320,68 @@ root.addEventListener('click', e => {
     case 'quick-done': run(async () => { const t = S.data.tasks.find(x => x.id===id); await saveTask({ ...t, status:'done' }); refreshTaskModal(id); render(); }, 'Готово! Задача выполнена'); break;
     case 'reopen': run(async () => { const t = S.data.tasks.find(x => x.id===id); await saveTask({ ...t, status:'work' }); refreshTaskModal(id); render(); }, 'Задача снова в работе'); break;
     case 'unlink': run(async () => { const k = S.data.tasks.find(x => x.id===id); const pid = k.parentId; await saveTask({ ...k, parentId:'' }); refreshTaskModal(pid); render(); }, 'Задача отвязана'); break;
-    case 'del-task': { const back = S.modal; S.modal = { type:'confirm', title:'Удалить задачу?', text:'Задача удалится у всех. Связанные с ней задачи останутся, но станут самостоятельными.', on: async () => {
-      await Api.call('deleteTask', { id }); const t = S.data.tasks.find(x => x.id===id); S.data.tasks = S.data.tasks.filter(x => x.id!==id);
-      S.data.tasks.forEach(c => { if (c.parentId===id) c.parentId=''; }); if (t?.parentId){ const p = S.data.tasks.find(x => x.id===t.parentId); if (p){ const v = computeLinkedProgress(S.data.tasks, p.id); p.progress = v===null ? (p.status==='done'?100:0) : v; } }
-      toast('Задача удалена'); } }; render(); break; }
+    case 'del-task': {
+      const t = S.data.tasks.find(x => x.id===id);
+      if (!t) break;
+      const isOwnerOrMgr = isOwner(S.user) || isManager(S.user);
+      const isChain = !!(t.recurringId || t.parentId || S.data.tasks.some(x => x.parentId === t.id));
+      if (isChain && isOwnerOrMgr) {
+        S.modal = {
+          type: 'confirm-chain',
+          task: t,
+          title: 'Удаление задачи и серии',
+          text: t.recurringId
+            ? 'Эта задача является регулярной (повторяющейся). Что именно удалить?'
+            : 'Эта задача связана в цепочку с другими. Как выполнить удаление?'
+        };
+      } else {
+        S.modal = {
+          type: 'confirm',
+          title: 'Удалить задачу?',
+          text: 'Задача удалится у всех сотрудников безвозвратно. Связанные задачи (если есть) станут самостоятельными.',
+          on: async () => {
+            await Api.call('deleteTask', { id });
+            const tt = S.data.tasks.find(x => x.id===id);
+            S.data.tasks = S.data.tasks.filter(x => x.id !== id);
+            S.data.tasks.forEach(c => { if (c.parentId===id) c.parentId=''; });
+            if (tt?.parentId) {
+              const p = S.data.tasks.find(x => x.id===tt.parentId);
+              if (p) { const v = computeLinkedProgress(S.data.tasks, p.id); p.progress = v===null ? (p.status==='done'?100:0) : v; }
+            }
+            toast('Задача удалена');
+          }
+        };
+      }
+      render();
+      break;
+    }
+    case 'do-del-single': {
+      S.modal = null;
+      run(async () => {
+        await Api.call('deleteTask', { id });
+        const tt = S.data.tasks.find(x => x.id===id);
+        S.data.tasks = S.data.tasks.filter(x => x.id !== id);
+        S.data.tasks.forEach(c => { if (c.parentId===id) c.parentId=''; });
+        if (tt?.parentId) {
+          const p = S.data.tasks.find(x => x.id===tt.parentId);
+          if (p) { const v = computeLinkedProgress(S.data.tasks, p.id); p.progress = v===null ? (p.status==='done'?100:0) : v; }
+        }
+        toast('Задача удалена');
+        render();
+      });
+      break;
+    }
+    case 'do-del-chain': {
+      S.modal = null;
+      run(async () => {
+        const r = await Api.call('deleteTaskChain', { id, deleteFutureOnly: false });
+        if (r.tasks) S.data.tasks = r.tasks;
+        else S.data.tasks = S.data.tasks.filter(x => x.id !== id); // fallback
+        toast(r.removed ? `Удалено задач: ${r.removed}` : 'Цепочка удалена');
+        render();
+      });
+      break;
+    }
     case 'confirm-yes': { const fn = S.modal.on; S.modal=null; run(async () => { await fn(); render(); }); render(); break; }
     /* регулярные дела */
     case 'tpls': S.modal = { type:'tpls' }; render(); break;
@@ -2907,6 +3419,20 @@ root.addEventListener('click', e => {
     case 'trainer-edit': S.modal = { type:'trainer', id }; render(); document.getElementById('trf-n')?.focus(); break;
     /* продажи и зарплата */
     case 'sal-tab': S.salTab = el.dataset.k; render(); break;
+    /* ---------- Шаблоны зарплаты: пресеты ставок и копирование месяца ---------- */
+    case 'preset-edit': if (!(isOwner(S.user) || isManager(S.user))){ toast('Пресеты ставок доступны владельцу и управляющему', true); break; }
+      S.modal = { type:'preset', kind:el.dataset.kind||'staff', id:el.dataset.id||'', prefill:presetPrefill(el.dataset.kind||'staff') }; render(); break;
+    case 'preset-apply': {
+      const kind = el.dataset.kind; const presetId = document.getElementById('preset-sel')?.value;
+      if (!presetId){ toast('Сначала выберите пресет в списке', true); break; }
+      run(async () => { const r = await Api.call('applyRatePreset', { kind, presetId, ids:presetTargets(kind) });
+        S.data.ratePresets = r.presets ?? S.data.ratePresets; if (r.rates) S.data.rates = r.rates;
+        toast(`Ставка применена: ${r.applied} чел.`); render(); }, 'Пресет применён');
+      break; }
+    case 'preset-del': S.modal = { type:'confirm', title:'Удалить пресет ставки?', text:'Сама ставка у сотрудников не меняется — удалится только шаблон.',
+        on: async () => { const r = await Api.call('deleteRatePreset', { id }); S.data.ratePresets = r.presets; S.modal = { type:'preset', kind:el.dataset.kind, id:'', prefill:presetPrefill(el.dataset.kind) }; toast('Пресет удалён'); } }; render(); break;
+    case 'copy-month': if (!(isOwner(S.user) || isManager(S.user))){ toast('Копировать месяц может владелец или управляющий', true); break; }
+      S.copyMonthFrom = ''; S.modal = { type:'copymonth' }; render(); break;
     case 'sal-admin': S.salAdmin = id; render(); break;
     case 'sale-edit': S.modal = { type:'sale', id, seller: el.dataset.seller }; render(); break;
     case 'sale-del': S.modal = { type:'confirm', title:'Удалить продажу?', text:'Она пропадёт из расчёта зарплаты и доходов.', on: async () => { await Api.call('deleteSale', { id }); S.data.sales = S.data.sales.filter(x => x.id!==id); toast('Продажа удалена'); } }; render(); break;
@@ -2983,8 +3509,30 @@ root.addEventListener('click', e => {
     /* финансы */
     case 'fin-del': { const kind = el.dataset.kind; run(async () => { await saveFin({ [kind]: (finMonthData()[kind]||[]).filter(x => x.id!==id) }); render(); }, 'Удалено'); break; }
     case 'debt-del': S.modal = { type:'confirm', title:'Удалить запись о долге?', text:'Остаток долга пересчитается.', on: async () => { S.data.debt = await Api.call('deleteDebt', { id }); toast('Удалено'); } }; render(); break;
+    case 'csv-import-cancel': {
+      const prev = document.getElementById('csv-preview-area');
+      if (prev) prev.innerHTML = '';
+      S._csvOrders = null;
+      break;
+    }
+    case 'csv-import-confirm': {
+      const orders = S._csvOrders;
+      if (!orders || !orders.length) { toast('Нет данных для импорта', true); break; }
+      run(async () => {
+        const r = await Api.call('importFinanceOrders', { month: S._csvMonth || S.finMonth, orders });
+        S.data.sales = r.sales || S.data.sales;
+        S._csvOrders = null;
+        const prev = document.getElementById('csv-preview-area');
+        if (prev) prev.innerHTML = `<div class="note" style="color:var(--st-done)">Импортировано: <b>${r.count}</b> на сумму <b>${money(r.totalAmount)}</b>${r.skipped ? ` · пропущено ${r.skipped}` : ''}</div>`;
+        toast(`Импорт: ${r.count} продаж`);
+        // обновить финансы месяца
+        if (S.data.finance) delete S.data.finance[S.finMonth];
+        render();
+      });
+      break;
+    }
     case 'debt-from-personal': { const c = calcFinance(S.finMonth); run(async () => {
-      for (const o of ['u1','u2']) if (c.personal[o]) S.data.debt = await Api.call('saveDebt', { d:{ owner:o, type:'loan', amount:c.personal[o], date:todayStr(), note:`Личные траты за ${monthName(S.finMonth).toLowerCase()}` } });
+      for (const o of (c.owners||[]).map(x => x.id)) if (c.personal[o]) S.data.debt = await Api.call('saveDebt', { d:{ owner:o, type:'loan', amount:c.personal[o], date:todayStr(), note:`Личные траты за ${monthName(S.finMonth).toLowerCase()}` } });
       render(); }, 'Добавлено в долг студии'); break; }
   }
 });
@@ -2994,8 +3542,11 @@ root.addEventListener('keydown', e => {
   if ((e.key==='Enter' || e.key===' ') && e.target.matches('h4[data-act="edit"]')){ e.preventDefault(); e.target.click(); }
   if (e.key==='Enter' && e.target.id==='tf-parent-q'){ e.preventDefault(); root.querySelector('#pp-list .pp-i')?.click(); return; }
   if (e.key==='Escape' && S.modal){ S.modal=null; render(); }
+  if (e.key==='Escape' && S.navOpen){ setNavOpen(''); } /* раскрытое меню групп закрывается по Esc */
   if (e.key==='Enter' && (e.ctrlKey||e.metaKey) && e.target.id==='cmt-text'){ e.preventDefault(); addComment(root.querySelector('[data-act="add-comment"]').dataset.id); }
 });
+/* Клик мимо раскрытой группы меню — свернуть её (capture, чтобы сработать до остальных обработчиков) */
+document.addEventListener('click', e => { if (S.navOpen && !(e.target.closest && e.target.closest('.nav-group'))) setNavOpen(''); }, true);
 
 root.addEventListener('input', e => {
   const r = e.target;
@@ -3223,6 +3774,25 @@ root.addEventListener('submit', e => {
     run(async () => { await Api.call('saveUser', { user:{ id:f.dataset.id, pass:p } }); S.modal=null; render(); }, 'Пароль изменён');
     return;
   }
+  /* --- Шаблоны зарплаты: сохранение пресета ставки --- */
+  if (f.id==='preset-form'){
+    const kind = f.dataset.kind, id = f.dataset.id;
+    const rate = { mode:v('ps-mode'), amount:v('ps-amount')==='' ? 0 : Number(v('ps-amount')) };
+    if (kind==='manager') rate.pct = v('ps-pct')==='' ? 0 : Number(v('ps-pct'));
+    run(async () => { const r = await Api.call('saveRatePreset', { p:{ id: id||undefined, kind, name:v('ps-n').trim(), rate } });
+      S.data.ratePresets = r.presets; S.modal=null; render(); }, id ? 'Пресет обновлён' : 'Пресет сохранён');
+    return;
+  }
+  /* --- Шаблоны зарплаты: копирование месяца --- */
+  if (f.id==='copymonth-form'){
+    const from = v('cm-from'); const to = S.salMonth;
+    const parts = { overrides:document.getElementById('cm-overrides')?.checked, kpi:document.getElementById('cm-kpi')?.checked,
+      pay:document.getElementById('cm-pay')?.checked, plan:document.getElementById('cm-plan')?.checked };
+    run(async () => { const r = await Api.call('copySalaryMonth', { from, to, parts });
+      if (r.payroll) S.data.payroll = r.payroll; if (r.pay) S.data.pay = r.pay; if (r.plans) S.data.plans = r.plans;
+      S.modal=null; render(); }, `Скопировано из ${monthName(from).toLowerCase()}`);
+    return;
+  }
   if (f.id==='maps-form'){
     run(async () => { S.data.settings = await Api.call('saveSettings', { settings:{ yandexOrgId:v('mf-y').trim(), twogisFirmId:v('mf-g').trim(), twogisCity:v('mf-c').trim()||'moscow' } }); render(); }, 'Сохранено');
     return;
@@ -3315,4 +3885,14 @@ const Push = {
   if (Api.token){ try { await loadAll(); return; } catch(e){ if (e.code==='AUTH'){ Api.token=''; tokenStore.del('sp_token'); } else { S.bootError = e.message; } } }
   render();
 })();
+
+/* ТЕСТОВЫЙ КРЮЧОК (безопасно): в браузере window.__SP_HOOK__ не задан и эта строка ничего не делает.
+   Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
+if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
+  S, Api, Auth, loadAll, render, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
+  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, team:viewTeam, sal:viewSal, fin:viewFin },
+  modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal() },
+  parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
+  demo: (action, payload) => Api.call(action, payload)
+});
 })();
