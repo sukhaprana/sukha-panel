@@ -5,9 +5,9 @@
                  Данные (задачи, отчёты) всегда берутся с сервера — офлайн их не подменяем.
    Можно менять: VERSION — увеличьте, если хотите, чтобы телефоны сразу забыли старую копию.
    ════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'sp-v5';   // увеличьте при следующей публикации — телефоны забудут старую копию панели
+const VERSION = 'sp-v6';   // увеличьте при следующей публикации — телефоны забудут старую копию панели
 /* Список файлов должен совпадать с адресами в index.html (включая ?v=…), иначе офлайн-копия не сработает */
-const SHELL = ['./', 'index.html', 'panel.css?v=4', 'panel.js?v=4', 'config.js?v=4', 'manifest.webmanifest', 'icons/icon-192.png'];
+const SHELL = ['./', 'index.html', 'panel.css?v=6', 'panel.js?v=6', 'config.js?v=6', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 /* 1. Пуш (Firebase) */
 try {
@@ -21,10 +21,22 @@ try {
 
 /* 2. Оболочка панели: сначала сеть, при её отсутствии — сохранённая копия */
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).catch(() => {})); self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('sp-') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;   // сервер Google не трогаем
-  e.respondWith(fetch(e.request).then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)).catch(() => {}); return res; })
-    .catch(() => caches.match(e.request).then(r => r || caches.match('index.html'))));
+  // Кэшируем только оболочку: никакие произвольные ответы и пользовательские файлы.
+  const shellPaths = new Set(SHELL.map(p => new URL(p, self.location.href).href));
+  if (!shellPaths.has(url.href) && e.request.mode!=='navigate') return;
+  e.respondWith(fetch(e.request).then(res => {
+    if (res.ok && res.type==='basic' && shellPaths.has(url.href)) {
+      const copy=res.clone(); e.waitUntil(caches.open(VERSION).then(c=>c.put(e.request,copy)).catch(()=>{}));
+    }
+    return res;
+  }).catch(async()=>{
+    const cached=await caches.match(e.request);
+    if (cached) return cached;
+    if (e.request.mode==='navigate') return await caches.match('index.html') || Response.error();
+    return Response.error();
+  }));
 });
