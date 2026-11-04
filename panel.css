@@ -120,7 +120,7 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .nav-drop .tab{width:100%;text-align:left;border-radius:10px;display:flex;justify-content:space-between;align-items:center}
 #sp-app .nav-drop .tab.on{background:var(--lav)}
 #sp-app .nav-group:last-child .nav-drop{left:auto;right:0} /* последнее меню не вылезает за край */
-@media (max-width:960px){#sp-app .nav-drop{display:none}} /* на телефоне меню — нижняя навигация и шторка «Ещё» */
+@media (max-width:640px){#sp-app .nav-drop{display:none}} /* на телефоне меню — нижняя навигация и шторка «Ещё» */
 
 /* Баннер просрочки */
 #sp-app .banner{display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap;background:var(--st-over-soft);
@@ -644,3 +644,17 @@ body{background:var(--bg);color:var(--ink)}
 /* Баннер «Доступна новая версия панели» (нейтральный лавандовый, не как тревожный красный) */
 #sp-app .banner.upd{background:var(--lav-soft);border-color:var(--lav);color:var(--ink)}
 #sp-app .banner.upd b{color:var(--ink)}
+
+/* Учёт: компактные фотографии не обрезаются, карточки адаптируются к экрану. */
+#sp-app .inventory-filters{display:flex;gap:14px;flex-wrap:wrap;margin:16px 0}
+#sp-app .inventory-filters label{display:grid;gap:6px;flex:1;min-width:180px}
+#sp-app .inventory-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px}
+#sp-app .inventory-card{display:flex;gap:16px;align-items:flex-start}
+#sp-app .inventory-photo{border:0;padding:0;background:transparent;cursor:zoom-in;flex:none}
+#sp-app .inventory-photo img,#sp-app .inventory-no-photo{width:96px;height:96px;object-fit:contain;border-radius:12px;background:#f4f2f8}
+#sp-app .inventory-no-photo{display:grid;place-items:center;color:#777;font-size:12px;flex:none}
+#sp-app .inventory-info{min-width:0;overflow-wrap:anywhere}
+#sp-app .inventory-info h3{margin:4px 0 10px}
+#sp-app .inventory-note{white-space:pre-wrap}
+#sp-app .inventory-thumb{width:120px;height:120px;object-fit:contain;border-radius:12px;margin:10px 0}
+#sp-app .inventory-full{display:block;width:100%;max-height:75vh;object-fit:contain}

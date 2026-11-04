@@ -19,12 +19,13 @@
    ===================================================================== */
 (function(){
 'use strict';
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
 
 /* ВЕРСИЯ СБОРКИ ПАНЕЛИ. Показывается на экране входа и в профиле; сервер сверяет её
    при каждом обновлении данных (bootstrap.build) и подсказывает, какая из сторон устарела.
    При публикации новой версии: увеличьте BUILD здесь, CORE_BUILD (общий с сервером) и ?v=… в index.html. */
-const BUILD = 5;
-const BUILD_NAME = 'v5 · 2 ноября 2026';
+const BUILD = 6;
+const BUILD_NAME = 'v6 · 4 ноября 2026';
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 1 · НАСТРОЙКИ (CONFIG)
@@ -56,7 +57,7 @@ const CONFIG = Object.assign({
 /*@CORE-START — отсюда и до @CORE-END код общий для браузера и Google Apps Script */
 /* Версия данных/протокола: панель и сервер сверяют её, чтобы подсказать, что нужно обновить.
    panel.js BUILD == Code.gs CORE_BUILD в одной поставке. */
-const CORE_BUILD = 5;
+const CORE_BUILD = 6;
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 2 · УТИЛИТЫ
    Что делает:   даты, деньги, экранирование текста — мелкие помощники для всего кода.
@@ -66,7 +67,12 @@ const CORE_BUILD = 5;
 /* ---------- 2. УТИЛИТЫ ---------- */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = u => { const s = String(u ?? '').trim(); return /^(?:https?:|mailto:|tel:|\/|#)/i.test(s) ? esc(s) : '#'; };
+const sheetText = v => typeof v==='string' && /^[\s]*[=+@\-]/.test(v) ? "'" + v : v;
 const safeImg = s => { const str = String(s ?? '').trim(); return (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);base64,/i.test(str) || /^https?:\/\//i.test(str)) ? esc(str) : ''; };
+/* private: — ссылка внутри базы, никогда не публичный URL. */
+const photoAttrs = value => /^private:[A-Za-z0-9_-]{10,160}$/.test(String(value||''))
+  ? `src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-private-photo="${esc(value.slice(8))}"`
+  : `src="${safeImg(value)}"`;
 const pad = n => String(n).padStart(2,'0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const parseYmd = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
@@ -129,6 +135,9 @@ const Rules = {
   /* Важные контакты: редактируют владельцы, управляющий и администраторы; СММ — только читает */
   canEditContacts: u => isOwner(u) || isManager(u) || isAdminRole(u),
   canManageTeam: u => isOwner(u),
+  /* Учёт доступен операционной команде; удаление — владельцу и управляющему. */
+  canUseInventory: u => isOwner(u) || isManager(u) || isAdminRole(u),
+  canDeleteInventory: u => isOwner(u) || isManager(u),
   canEditTemplates: u => isOwner(u) || isManager(u),
   canEditSchedule: u => isOwner(u) || isManager(u),
   canSyncReviews: u => isOwner(u) || isManager(u),
@@ -379,7 +388,8 @@ const payerName = k => { const own = (S.data?.users||[]).find(u => u.id===k && i
    В режиме 'demo' их обрабатывает DemoServer (ниже) — это эмуляция того же
    Apps Script, что будет стоять за Google Таблицей. Проверки прав
    дублируются на сервере, поэтому подмена кода в браузере ничего не даст. */
-const SEED_TASKS = [{"id": "o1", "level": "owners", "block": "До 1 ноября", "title": "Вычет 13%: узнать, принимают ли ещё заявку на 2027 год", "desc": "Позвонить в Департамент спорта Москвы (справочная +7 495 777-77-77; ул. Лужники, 24, стр. 38). В Москве документы в прошлые годы принимали до 1 октября, а регионы передают списки в Минспорт до 1 ноября — на 2027 год, скорее всего, опоздали, но спросить. Если нет — готовимся к подаче осенью 2027.", "assignee": "u2", "helper": "u1", "start": "2026-10-21", "due": "2026-10-23", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "Нужны: основной ОКВЭД спорт, хотя бы 1 сотрудник по трудовому договору с дипломом по физкультуре (СПО+ или переподготовка), штатное расписание.", "createdBy": "u1"}, {"id": "o2", "level": "owners", "block": "До 1 ноября", "title": "Сменить основной ОКВЭД ИП на 93.13 «Деятельность фитнес-центров»", "desc": "Сначала спросить бухгалтера, не изменятся ли налог и взносы. Потом заявление Р24001 в ФНС (сайт ФНС / Госуслуги с ЭП или МФЦ), бесплатно, около 5 рабочих дней. Основной ОКВЭД ИП может поменять сам.", "assignee": "u2", "helper": "", "start": "2026-10-22", "due": "2026-11-06", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o3", "level": "owners", "block": "До 1 ноября", "title": "Подписать договоры со всеми администраторами (2 экз.)", "desc": "Один экземпляр у нас, второй — на ресепшене.", "assignee": "u1", "helper": "u2", "start": "2026-10-22", "due": "2026-10-31", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o4", "level": "owners", "block": "До 1 ноября", "title": "Сменить пароль платёжного кабинета, поставить пароли на MAX и Telegram", "desc": "Пароль лежал в «Избранном» рабочего MAX. Если уже сделано — отметить «Готово».", "assignee": "u1", "helper": "", "start": "2026-10-21", "due": "2026-10-22", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o5", "level": "owners", "block": "Решения: продажи", "title": "Марафон «12 занятий за 30 дней» — утвердить правила и призы", "desc": "Анонс 26.10, старт 9.11. Правила — в «Плане роста». После утверждения Катя готовит посты и картинку.", "assignee": "u1", "helper": "u2", "start": "2026-10-21", "due": "2026-10-25", "dueTime": "20:00", "priority": "urgent", "status": "wait", "progress": 0, "comment": "Подготовься к Новому году → в январе «Приди в себя после праздников».", "createdBy": "u1"}, {"id": "o6", "level": "owners", "block": "Решения: продажи", "title": "Акция октября — не делаем массовую", "desc": "Админы выгружают тех, у кого абонемент кончается до 15.11 → им продление по регламенту (скидка 10% до окончания). Тем, кто сомневается, — точечно 15%.", "assignee": "u1", "helper": "u3", "start": "2026-10-22", "due": "2026-10-24", "dueTime": "20:00", "priority": "high", "status": "wait", "progress": 0, "comment": "Согласен с Катей: пусть просто продлевают.", "createdBy": "u2"}, {"id": "o7", "level": "owners", "block": "Решения: продажи", "title": "Чёрная пятница (27–29 ноября) — механика", "desc": "Предлагаю: только сертификаты и абонемент на 16 со скидкой 20% (по лестнице 20% — только ЧП и ДР студии), для новых и тех, у кого нет действующего абонемента. Продления не трогаем.", "assignee": "u1", "helper": "u2", "start": "2026-10-23", "due": "2026-11-06", "dueTime": "20:00", "priority": "high", "status": "wait", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o8", "level": "owners", "block": "Решения: продажи", "title": "Счастливые часы — формат", "desc": "Решить: какие слоты (утро 9–10, вс вечер), цена разового, только для слабых занятий.", "assignee": "u1", "helper": "u2", "start": "2026-10-28", "due": "2026-11-06", "dueTime": "20:00", "priority": "mid", "status": "wait", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o9", "level": "owners", "block": "Решения: продажи", "title": "Корпоративные клиенты", "desc": "Владислав: написать Alina Lebedeva (скрипт 12), утвердить цены, вести первые встречи в БЦ. Олег готовит список и письма.", "assignee": "u1", "helper": "u3", "start": "2026-10-22", "due": "2026-11-30", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "Цены: группа от 8 000 ₽ или 1 000 ₽/чел (мин. 8), выезд 6–8 тыс., пакет 50 занятий 55 000 ₽.", "createdBy": "u1"}, {"id": "o10", "level": "owners", "block": "Решения: продажи", "title": "Реклама на Ozon — что это даёт", "desc": "Уточнить формат (реклама студии или продажа сертификатов на Ozon), получить предложение: цена, гео, аудитория. Сравнить: пробное должно стоить не дороже 1 500–2 000 ₽.", "assignee": "u1", "helper": "", "start": "2026-10-28", "due": "2026-11-13", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o11", "level": "owners", "block": "Деньги и персонал", "title": "Оплата администраторов с января", "desc": "Ноябрь–декабрь платим по-старому, но считаем «как было бы» по новой схеме и показываем админам. Тогда гарантия 55 тыс. не нужна. Утвердить до 15.12.", "assignee": "u1", "helper": "u2", "start": "2026-11-01", "due": "2026-12-15", "dueTime": "20:00", "priority": "high", "status": "wait", "progress": 0, "comment": "Расходы на админов при любой выручке 15–17%: меньше продаж — меньше выплата.", "createdBy": "u1"}, {"id": "o12", "level": "owners", "block": "Деньги и персонал", "title": "Взять в штат Пелагею", "desc": "Трудовой договор, штатное расписание, копия диплома по физкультуре. Посчитать: НДФЛ 13% + взносы ~30% сверх зарплаты.", "assignee": "u2", "helper": "u1", "start": "2026-10-22", "due": "2026-11-30", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "Это же нужно для перечня Минспорта.", "createdBy": "u2"}, {"id": "o13", "level": "owners", "block": "Деньги и персонал", "title": "Решить, кого из администраторов в штат", "desc": "После расчёта взносов; удобно с января вместе с новой оплатой.", "assignee": "u2", "helper": "u1", "start": "2026-11-01", "due": "2026-12-15", "dueTime": "20:00", "priority": "mid", "status": "wait", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o14", "level": "owners", "block": "Деньги и персонал", "title": "Договор с тренерами — разработать", "desc": "Взять имеющийся шаблон, добавить: ставки, отмены, запрет личных продаж на занятии, конфиденциальность базы клиентов. Показать юристу.", "assignee": "u1", "helper": "", "start": "2026-10-23", "due": "2026-11-06", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o15", "level": "owners", "block": "Деньги и персонал", "title": "Подписать договоры со всеми тренерами (2 экз.)", "desc": "После утверждения шаблона.", "assignee": "u2", "helper": "u1", "start": "2026-11-09", "due": "2026-11-20", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o16", "level": "owners", "block": "Деньги и персонал", "title": "Документы для мам и беременных", "desc": "Черновики правил посещения, анкеты здоровья и согласий → юрист → утвердить. Черновики может подготовить Claude.", "assignee": "u2", "helper": "u1", "start": "2026-10-23", "due": "2026-11-10", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o17", "level": "owners", "block": "Команда", "title": "День тренера (боулинг)", "desc": "Предложить тренерам 2 даты (например, вс 22.11 или вс 29.11 после 19:00), опрос до 5.11. Кто не может — подарок (шоколад, носки, открытка, ~500–700 ₽). От клиентов: открытки-благодарности на стойке за неделю до.", "assignee": "u2", "helper": "u1", "start": "2026-10-28", "due": "2026-11-29", "dueTime": "20:00", "priority": "mid", "status": "wait", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o18", "level": "owners", "block": "Команда", "title": "Обучение тренеров — формат", "desc": "Обсудить, что важнее: работа с новичком, удержание, безопасность (беременные, спина). Вариант: встреча раз в месяц по 1,5 часа.", "assignee": "u1", "helper": "u2", "start": "2026-12-01", "due": "2026-12-20", "dueTime": "20:00", "priority": "low", "status": "wait", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o19", "level": "owners", "block": "Идеи — позже", "title": "Выезд в Подмосковье", "desc": "Не раньше весны. Сначала опрос в Telegram: интерес, бюджет, даты. Запускать при 10–12 предоплатах.", "assignee": "u2", "helper": "", "start": "2027-01-11", "due": "2027-01-31", "dueTime": "20:00", "priority": "low", "status": "wait", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o20", "level": "owners", "block": "Идеи — позже", "title": "Проектор", "desc": "Сначала — зачем (кино-вечер, лекции). Простыня не подойдёт: портативный экран на треноге 80–100″ или ровная белая стена.", "assignee": "u1", "helper": "", "start": "2027-01-11", "due": "2027-01-31", "dueTime": "20:00", "priority": "low", "status": "wait", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "o21", "level": "owners", "block": "Идеи — позже", "title": "Мастер-классы: столы и стулья", "desc": "Варианты: низкие складные столики прямо на ковриках (рисование, свечи, гипс) или проводить в кофейне-партнёре. Сначала один пилотный класс.", "assignee": "u2", "helper": "", "start": "2026-11-02", "due": "2026-11-20", "dueTime": "20:00", "priority": "low", "status": "wait", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "o22", "level": "owners", "block": "Идеи — позже", "title": "Благодарность клиентам (вместо «подарка за отзыв»)", "desc": "Дарить за отзыв нельзя — карты удаляют такие отзывы. Вместо этого: мелочь всем на 10-м занятии или при продлении, а отзыв просим отдельно.", "assignee": "u2", "helper": "", "start": "2026-10-28", "due": "2026-11-15", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m1", "level": "management", "block": "Срочно", "title": "Карточка 2ГИС — ИЗМЕНИТЬ до 1 ноября", "desc": "Цены по прайсу от 11.10 (сейчас там «абонемент от 2 400 ₽»), фото залов, утренний и льготные абонементы.", "assignee": "u3", "helper": "u2", "start": "2026-10-21", "due": "2026-10-30", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m2", "level": "management", "block": "Срочно", "title": "Расписание на ноябрь", "desc": "Подготовить по правилам (утро 9:00+10:00, четверг 4→2, пятница 21:00 — одно занятие) и отдать на утверждение.", "assignee": "u3", "helper": "", "start": "2026-10-21", "due": "2026-10-25", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m3", "level": "management", "block": "Срочно", "title": "Ремонт — доделать", "desc": "", "assignee": "u2", "helper": "", "start": "2026-10-26", "due": "2026-10-27", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m4", "level": "management", "block": "Срочно", "title": "Марафон — подготовка", "desc": "После утверждения правил: пост и картинка, памятка админам, пометка «ЧЕЛЛЕНДЖ» в CRM, подарок от партнёра.", "assignee": "u2", "helper": "u3", "start": "2026-10-25", "due": "2026-11-08", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m5", "level": "management", "block": "CRM и админы", "title": "Письмо в поддержку Mobifitness", "desc": "6 вопросов из документа управляющего: триггеры, автозадачи, теги, модуль чатов, цена тарифа.", "assignee": "u3", "helper": "", "start": "2026-10-22", "due": "2026-10-24", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m6", "level": "management", "block": "CRM и админы", "title": "CRM: поля, справочники, теги", "desc": "Источник клиента, причина отказа, ответственный; теги НЕ БЕСПОКОИТЬ / ИСКЛ / ЧЕЛЛЕНДЖ / СОТРУДНИК.", "assignee": "u3", "helper": "", "start": "2026-10-23", "due": "2026-10-31", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m7", "level": "management", "block": "CRM и админы", "title": "CRM: новые задачи и временные диапазоны", "desc": "Напоминание о записи за 12 ч, «осталось 2 занятия / 5 дней», «14 дней без визита», «31 день без абонемента». Запуск по неделям: новички → продления → возврат.", "assignee": "u3", "helper": "", "start": "2026-10-28", "due": "2026-11-20", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m8", "level": "management", "block": "CRM и админы", "title": "Админы: отчёт смены, шаблоны, задачи", "desc": "Ввести шаблон отчёта смены, загрузить тексты Н1–У6 в шаблоны, раздать регламент.", "assignee": "u3", "helper": "", "start": "2026-10-22", "due": "2026-10-31", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m9", "level": "management", "block": "CRM и админы", "title": "Документы: обновить и заполнить", "desc": "Приложение 1 договора админов (цены от 11.10), оферта и правила студии под новый прайс. Катя — проверить и подписать.", "assignee": "u2", "helper": "u3", "start": "2026-10-23", "due": "2026-11-06", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m10", "level": "management", "block": "CRM и админы", "title": "Еженедельный отчёт собственникам", "desc": "Каждый понедельник до 12:00 по шаблону из документа управляющего.", "assignee": "u3", "helper": "", "start": "2026-10-26", "due": "2027-01-25", "dueTime": "20:00", "priority": "mid", "status": "work", "progress": 30, "comment": "", "createdBy": "u1"}, {"id": "m11", "level": "management", "block": "Партнёры и печать", "title": "«Счастье тут» — стаканчики", "desc": "Сразу идём в стаканчики: наклейка с QR на «Знакомство» по промокоду, напиток «йога-латте»; им — занятие в подарок для сотрудников. Визитки отложить.", "assignee": "u1", "helper": "u2", "start": "2026-10-23", "due": "2026-11-15", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "Назначить, кто из нас договаривается.", "createdBy": "u3"}, {"id": "m12", "level": "management", "block": "Партнёры и печать", "title": "Пекарня («хлеб»)", "desc": "Та же универсальная листовка с их промокодом; им — пробное занятие для клиентов, от них — подарок участникам марафона.", "assignee": "u2", "helper": "", "start": "2026-10-28", "due": "2026-11-20", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m13", "level": "management", "block": "Партнёры и печать", "title": "Универсальные листовки и новые визитки", "desc": "Один макет: QR, «Знакомство», адрес, промокод партнёра. Заказать одной партией.", "assignee": "u2", "helper": "u1", "start": "2026-10-28", "due": "2026-11-10", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m14", "level": "management", "block": "Новый год", "title": "Ревизия старых боксов", "desc": "Посмотреть, что осталось, и включить в новогодние наборы.", "assignee": "u2", "helper": "", "start": "2026-10-26", "due": "2026-10-31", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m15", "level": "management", "block": "Новый год", "title": "Конверты для сертификатов", "desc": "Найти недорогие красивые, заказать до 10.11.", "assignee": "u2", "helper": "", "start": "2026-10-26", "due": "2026-11-10", "dueTime": "20:00", "priority": "high", "status": "work", "progress": 30, "comment": "", "createdBy": "u2"}, {"id": "m16", "level": "management", "block": "Новый год", "title": "Новогодние боксы — состав и цена", "desc": "", "assignee": "u2", "helper": "", "start": "2026-11-02", "due": "2026-11-15", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m17", "level": "management", "block": "Новый год", "title": "Старт продаж сертификатов 20.11", "desc": "Витрина на стойке, пост в канале, push в приложении, корпоративным клиентам.", "assignee": "u3", "helper": "u2", "start": "2026-11-16", "due": "2026-11-20", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m18", "level": "management", "block": "Новый год", "title": "Мастер-класс свечи / гипс", "desc": "Анонс до 15.11, провести в середине декабря.", "assignee": "u2", "helper": "", "start": "2026-11-02", "due": "2026-12-13", "dueTime": "20:00", "priority": "mid", "status": "work", "progress": 30, "comment": "", "createdBy": "u2"}, {"id": "m19", "level": "management", "block": "Новый год", "title": "Мастер-класс по духам — опрос", "desc": "Опрос в Telegram, решить по результату.", "assignee": "u2", "helper": "", "start": "2026-11-02", "due": "2026-11-15", "dueTime": "20:00", "priority": "low", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m20", "level": "management", "block": "Новый год", "title": "Ёлка и украшения", "desc": "", "assignee": "u2", "helper": "", "start": "2026-11-23", "due": "2026-12-01", "dueTime": "20:00", "priority": "low", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m21", "level": "management", "block": "Новый год", "title": "Новогоднее событие для клиентов", "desc": "Чай, подарки партнёров, клиенты с друзьями.", "assignee": "u2", "helper": "u3", "start": "2026-12-01", "due": "2026-12-20", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m22", "level": "management", "block": "Привлечение", "title": "«Мама + малыш» с Натальей", "desc": "Формат, возраст детей, дата старта; админы собирают лист ожидания.", "assignee": "u2", "helper": "", "start": "2026-10-22", "due": "2026-10-31", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "m23", "level": "management", "block": "Привлечение", "title": "Корпоративные: список компаний и письма", "desc": "20–30 компаний («Ривер Плаза», «Полином», «Навигатор» и др.), письмо — скрипт 10, напоминание через 3 дня.", "assignee": "u3", "helper": "u1", "start": "2026-11-02", "due": "2026-11-20", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m24", "level": "management", "block": "Привлечение", "title": "Открытое занятие для ушедших", "desc": "Предлагаю сб 21.11 (до Чёрной пятницы); приглашения — текст У3.", "assignee": "u3", "helper": "u2", "start": "2026-11-09", "due": "2026-11-21", "dueTime": "20:00", "priority": "mid", "status": "wait", "progress": 0, "comment": "Дату согласовать.", "createdBy": "u2"}, {"id": "m25", "level": "management", "block": "Привлечение", "title": "День открытых дверей для ЖК", "desc": "Январь — старт сезона, например сб 17.01.", "assignee": "u2", "helper": "u3", "start": "2026-12-15", "due": "2027-01-17", "dueTime": "20:00", "priority": "mid", "status": "wait", "progress": 0, "comment": "Дату согласовать.", "createdBy": "u1"}, {"id": "m26", "level": "management", "block": "Привлечение", "title": "Розыгрыш с кофейней для канала", "desc": "Условие — подписка на оба канала.", "assignee": "u2", "helper": "", "start": "2026-11-09", "due": "2026-11-22", "dueTime": "20:00", "priority": "low", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "m27", "level": "management", "block": "Привлечение", "title": "Счастливые часы — настроить", "desc": "После решения собственников.", "assignee": "u3", "helper": "", "start": "2026-11-09", "due": "2026-11-15", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u2"}, {"id": "m28", "level": "management", "block": "Привлечение", "title": "Чёрная пятница — подготовка", "desc": "Пост, push, памятка админам, сертификаты на стойке.", "assignee": "u3", "helper": "u2", "start": "2026-11-16", "due": "2026-11-27", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u1"}, {"id": "t1", "level": "team", "block": "Старт", "title": "Прочитать «Регламент администратора»", "desc": "Задать вопросы Олегу.", "assignee": "u4", "helper": "u5", "start": "2026-10-22", "due": "2026-10-25", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "t2", "level": "team", "block": "Старт", "title": "Подписать договор (2 экз.)", "desc": "", "assignee": "u4", "helper": "u5", "start": "2026-10-22", "due": "2026-10-31", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u4"}, {"id": "t3", "level": "team", "block": "Старт", "title": "Список: у кого абонемент кончается до 15.11", "desc": "Каждому — продление по тексту П1 (скидка 10% до окончания). Массовой акции в октябре нет.", "assignee": "u4", "helper": "u5", "start": "2026-10-22", "due": "2026-10-25", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u5"}, {"id": "t4", "level": "team", "block": "Клиенты", "title": "Обзвон 79 ценных ушедших клиентов", "desc": "10 контактов за смену, файл обзвона. Результат — в карточку CRM.", "assignee": "u4", "helper": "u5", "start": "2026-10-22", "due": "2026-11-15", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "t5", "level": "team", "block": "Клиенты", "title": "Лист ожидания «Мама + малыш» и беременные", "desc": "18 клиенток из переписки + Гаврилова, Гаряева, Дорофеева, Гузева.", "assignee": "u5", "helper": "", "start": "2026-10-22", "due": "2026-10-31", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "t6", "level": "team", "block": "Марафон", "title": "Приглашать в марафон", "desc": "Каждому клиенту у стойки + текст ЧЕЛ тем, у кого заканчивается абонемент.", "assignee": "u4", "helper": "u5", "start": "2026-10-27", "due": "2026-11-08", "dueTime": "20:00", "priority": "urgent", "status": "todo", "progress": 0, "comment": "", "createdBy": "u4"}, {"id": "t7", "level": "team", "block": "Марафон", "title": "Понедельничный счёт и сообщения отстающим", "desc": "Каждый понедельник 9.11–7.12.", "assignee": "u3", "helper": "u4", "start": "2026-11-09", "due": "2026-12-08", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u5"}, {"id": "t8", "level": "team", "block": "Марафон", "title": "Итоги и подарки", "desc": "9–10 декабря; продление на 16 со скидкой до 15.12.", "assignee": "u3", "helper": "u5", "start": "2026-12-09", "due": "2026-12-15", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "t9", "level": "team", "block": "Продажи", "title": "Пригласить ушедших на открытое занятие", "desc": "Текст У3, после того как дата утверждена.", "assignee": "u5", "helper": "u4", "start": "2026-11-09", "due": "2026-11-20", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}, {"id": "t10", "level": "team", "block": "Продажи", "title": "Чёрная пятница — сообщения и продажи", "desc": "", "assignee": "u4", "helper": "u5", "start": "2026-11-23", "due": "2026-11-29", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u4"}, {"id": "t11", "level": "team", "block": "Продажи", "title": "Продажа новогодних сертификатов у стойки", "desc": "Предлагать каждому при продлении.", "assignee": "u4", "helper": "u5", "start": "2026-11-20", "due": "2026-12-31", "dueTime": "20:00", "priority": "high", "status": "todo", "progress": 0, "comment": "", "createdBy": "u5"}, {"id": "t12", "level": "team", "block": "Продажи", "title": "Корпоративные: найти контакты HR / офис-менеджеров", "desc": "В «Ривер Плазе», «Полиноме», «Навигаторе».", "assignee": "u5", "helper": "u3", "start": "2026-11-02", "due": "2026-11-13", "dueTime": "20:00", "priority": "mid", "status": "todo", "progress": 0, "comment": "", "createdBy": "u3"}];
+/* Рабочие задачи первого запуска хранятся только в серверном файле. */
+const SEED_TASKS = typeof SERVER_SEED_TASKS==='undefined' ? [] : SERVER_SEED_TASKS;
 const TRAINER_NAMES = ['Лущай Екатерина','Коршунова Алена','Николаева Анна','Пономарева Юлия','Рубцова Кира','Гуменная Мария','Яценко Регина','Федорова Мария',
   'Томилина Альбина','Нестерова Пелагея','Солдаткина Евгения','Игнатьев Алексей','Никитина Наталья','Гуреев Евгений','Рудаковская Наталья','Кириллова Регина','Качалова Елизавета','Моисеева Алена'];
 const shortName = full => { const w = String(full||'').trim().split(/\s+/); return w.length>=2 ? w[1] : (w[0]||''); };
@@ -589,8 +599,8 @@ function computeLinkedProgress(tasks, pid){
      delay: мс                      имитация сети (демо) */
 function createServer(opts){
   let db = null;
-  function load(){ db = opts.load(); if (!db || db.v !== 6){ db = opts.seed(); save(); } }
-  const save = () => opts.save(db);
+  function load(){ db = opts.load(); if (!db){ db = opts.seed(); save(); } else if (db.v!==6) err('Неподдерживаемая версия базы. Требуется миграция; данные сохранены.', 'SCHEMA'); }
+  const save = () => { if (opts.save(db)===false) err('Не удалось сохранить данные: хранилище заполнено.', 'STORAGE'); return true; };
   const setPass = (u, plain) => opts.setPass ? opts.setPass(u, String(plain)) : (u.pass = String(plain));
   const checkPass = (u, plain) => opts.checkPass ? opts.checkPass(u, String(plain||'')) : u.pass === plain;
   const event = (type, data) => { try { opts.onEvent && opts.onEvent(type, data, db); } catch(e){} };
@@ -709,7 +719,7 @@ function createServer(opts){
       const rec = db.resetLimit[u.id];
       if (rec && rec.hour===hour && rec.n >= 5) return silent;   // не чаще 5 кодов в час
       db.resetLimit[u.id] = { hour, n: (rec && rec.hour===hour ? rec.n : 0) + 1 };
-      const code = String(Math.floor(100000 + Math.random()*900000));
+      const code = opts.resetCode ? opts.resetCode() : String(Math.floor(100000 + Math.random()*900000));
       db.resetCodes = db.resetCodes || {};
       db.resetCodes[u.id] = { hash:String(opts.hashCode ? opts.hashCode(code) : hash(code)), exp:Date.now() + 15*60000, tries:0 };
       /* Доставка: в рабочей версии — Telegram/почта (код не покидает сервер), в демо — показывается на экране */
@@ -728,7 +738,7 @@ function createServer(opts){
       if (rec.tries > 5){ delete db.resetCodes[u.id]; save(); err('Слишком много неверных попыток. Запросите новый код.','AUTH'); }
       const wrongCode = () => { save(); err('Неверный код. Осталось попыток: ' + Math.max(0, 5 - rec.tries) + '.','AUTH'); };
       if (String(opts.hashCode ? opts.hashCode(String(code)) : hash(String(code))) !== rec.hash) return wrongCode();
-      if (String(pass||'').length < 6) err('Пароль — минимум 6 символов.','VALIDATION');
+      if (String(pass||'').length < 10) err('Пароль — минимум 10 символов.','VALIDATION');
       setPass(u, pass);
       delete db.resetCodes[u.id];
       if (opts.dropAllFor) opts.dropAllFor(u.id, db);   // прежние сеансы закрываются
@@ -739,7 +749,7 @@ function createServer(opts){
        Ошибка кода VALIDATION (а не AUTH), чтобы неверный старый пароль не разлогинивал человека */
     changeMyPass({ oldPass, newPass }, u){
       if (!checkPass(u, String(oldPass||''))) err('Старый пароль неверен.','VALIDATION');
-      if (String(newPass||'').length < 6) err('Новый пароль — минимум 6 символов.','VALIDATION');
+      if (String(newPass||'').length < 10) err('Новый пароль — минимум 10 символов.','VALIDATION');
       if (String(newPass) === String(oldPass)) err('Новый пароль совпадает со старым.','VALIDATION');
       setPass(u, newPass);
       if (opts.dropAllFor){ opts.dropAllFor(u.id, db); const t = opts.issueToken(u, db); save(); return { ok:true, token:t }; }
@@ -770,15 +780,71 @@ function createServer(opts){
       if (!Rules.canEditContacts(u)) err('Контакты редактируют владельцы, управляющий и администраторы.');
       db.contacts = (db.contacts||[]).filter(x => x.id!==id); save(); return { contacts: db.contacts };
     },
+    /* Учёт остатков: сервер задаёт автора и даты; полное фото не входит в bootstrap.
+       expectedUpdatedAt предотвращает потерю правок при одновременной работе. */
+    saveInventory({ item, expectedUpdatedAt }, u){
+      if (!Rules.canUseInventory(u)) err('Нет доступа к учёту.');
+      if (!item || typeof item!=='object') err('Нет данных позиции.', 'VALIDATION');
+      const list = db.inventory = db.inventory || [];
+      const old = item.id ? list.find(x => x.id===item.id) : null;
+      if (item.id && !old) err('Позиция удалена. Обновите список.', 'NOT_FOUND');
+      if (old && expectedUpdatedAt!==old.updatedAt) err('Позицию уже изменил коллега. Закройте форму и обновите данные.', 'CONFLICT');
+      const name = String(item.name||'').trim().slice(0,120);
+      const quantity = Number(item.quantity);
+      if (!name || item.quantity==='' || item.quantity==null || !Number.isFinite(quantity) || quantity<0 || quantity>1e9) err('Укажите название и количество от 0 до 1 000 000 000.', 'VALIDATION');
+      if (!['supply','product'].includes(item.kind)) err('Выберите вид позиции.', 'VALIDATION');
+      const purchasedAt = String(item.purchasedAt||'');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(purchasedAt) || ymd(parseYmd(purchasedAt))!==purchasedAt || purchasedAt>todayStr()) err('Укажите корректную дату закупки не позднее сегодня.', 'VALIDATION');
+      const photoValue = (value, max) => {
+        if (typeof value!=='string' || value.length>max || (value && !/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(value))) err('Нужна сжатая фотография JPEG.', 'VALIDATION');
+        return value;
+      };
+      const photo = 'photo' in item ? photoValue(item.photo, 350000) : old?.photo || '';
+      const thumbnail = 'thumbnail' in item ? photoValue(item.thumbnail, 24000) : old?.thumbnail || '';
+      if (!!photo!==!!thumbnail) err('Загрузите фото повторно.', 'VALIDATION');
+      if (!old && list.length>=1000) err('Достигнут лимит 1000 позиций.', 'VALIDATION');
+      const stamp = nowIso();
+      const rec = { id:old?.id || uid('inv'), name, kind:item.kind, quantity,
+        unit:String(item.unit||'шт.').trim().slice(0,20), purchasedAt,
+        note:String(item.note||'').trim().slice(0,500), photo, thumbnail,
+        createdAt:old?.createdAt || stamp, createdBy:old?.createdBy || u.id,
+        updatedAt:stamp, updatedBy:u.id };
+      upsert(list, rec); save();
+      const { photo:_, ...pub } = rec;
+      return { ...pub, hasPhoto:!!photo };
+    },
+    deleteInventory({ id, expectedUpdatedAt }, u){
+      if (!Rules.canDeleteInventory(u)) err('Удалять позиции могут владелец и управляющий.');
+      const rec = (db.inventory||[]).find(x => x.id===id);
+      if (!rec) err('Позиция не найдена.', 'NOT_FOUND');
+      if (rec.updatedAt!==expectedUpdatedAt) err('Позицию уже изменил коллега. Обновите список.', 'CONFLICT');
+      db.inventory = db.inventory.filter(x => x.id!==id); save(); return { ok:true };
+    },
+    /* Фото Диска выдаётся только если оно связано с отчётом или шагом гайда.
+       Само знание Google file ID не даёт прочитать произвольный файл владельца. */
+    getPrivatePhoto({ id }, u){
+      if (!opts.readPhoto) err('Фотохранилище недоступно.', 'CONFIG');
+      if (!/^[A-Za-z0-9_-]{10,160}$/.test(String(id||''))) err('Неверный идентификатор фото.', 'VALIDATION');
+      const ref='private:'+id;
+      const allowed=(db.reports||[]).some(r=>r.photo===ref) || (db.guide||[]).some(g=>(g.steps||[]).some(st=>st && st.img===ref));
+      if (!allowed) err('Фото не найдено.', 'NOT_FOUND');
+      return { photo:opts.readPhoto(id) };
+    },
+    getInventoryPhoto({ id }, u){
+      if (!Rules.canUseInventory(u)) err('Нет доступа к учёту.');
+      const rec = (db.inventory||[]).find(x => x.id===id);
+      if (!rec) err('Позиция не найдена.', 'NOT_FOUND');
+      return { photo:rec.photo || '' };
+    },
     /* Регистрация: аккаунт создаётся неактивным, владельцам уходит уведомление
        (в рабочей версии — ещё и письмо на почту владельцев через Apps Script) */
     register({ fullName, role, phone, email, pass }){
       fullName = String(fullName||'').trim().replace(/\s+/g,' '); email = String(email||'').trim().toLowerCase();
       if (fullName.split(' ').length < 2) err('Укажите фамилию и имя полностью.','VALIDATION');
-      if (!ROLES[role]) err('Выберите роль.','VALIDATION');
+      if (!Object.prototype.hasOwnProperty.call(ROLES, role)) err('Выберите роль.','VALIDATION');
       if (normPhone(phone).length < 11) err('Укажите телефон полностью, например +7 900 123-45-67.','VALIDATION');
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) err('Проверьте адрес почты.','VALIDATION');
-      if (String(pass||'').length < 6) err('Пароль — минимум 6 символов.','VALIDATION');
+      if (String(pass||'').length < 10) err('Пароль — минимум 10 символов.','VALIDATION');
       if (db.users.some(x => (x.email && x.email.toLowerCase()===email) || (x.login && x.login.toLowerCase()===email))) err('Пользователь с такой почтой уже есть.','VALIDATION');
       if (db.users.some(x => normPhone(x.phone) && normPhone(x.phone)===normPhone(phone))) err('Пользователь с таким телефоном уже есть.','VALIDATION');
       const palette = ['#899C84','#CCC1FF','#EBCB8B','#9FC3BE','#E8B4C4','#B9C7A6','#D6CBB5'];
@@ -806,7 +872,9 @@ function createServer(opts){
           return x.active && x.status === 'active'; // остальные — только активных
         }).map(x => pubUser(x, owner)),
         trainers: db.trainers,
-        contacts: db.contacts || [],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
+        contacts: db.contacts || [],
+        ...(Rules.canUseInventory(u) ? { inventory:(db.inventory||[]).map(({ photo, ...item }) => ({ ...item, hasPhoto:!!photo })) } : {}),
+        capabilities:['inventory-v1'],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
         build: CORE_BUILD,            /* версия сервера: панель сверяет со своей и подсказывает, кому пора обновиться */
         tasks: db.tasks.filter(t => Rules.canSeeTask(u,t)),
         templates: db.templates.filter(t => levels.includes(t.level)),
@@ -973,9 +1041,8 @@ function createServer(opts){
       let g = { ...item, id: item.id || uid('g'), draft:false, updatedBy:u.id, updatedAt:nowIso() };
       if (!g.title || !g.title.trim()) err('Укажите название инструкции.','VALIDATION');
       if (opts.onGuide) g = opts.onGuide(g) || g;
-      const prev = JSON.stringify(db.guide);
       if (i>=0) db.guide[i]=g; else db.guide.push(g);
-      if (!save()){ db.guide = JSON.parse(prev); err('Фото не поместились в хранилище браузера (это ограничение прототипа). В рабочей версии фото хранятся на Google Диске.','QUOTA'); }
+      save();
       return g;
     },
     deleteGuide({ id }, u){
@@ -992,14 +1059,16 @@ function createServer(opts){
       if (user.active===false && old.id===u.id) err('Нельзя отключить свою собственную учётную запись.');
       if (old.role==='owner' && ((user.role && user.role!=='owner') || user.active===false) && owners.length<=1) err('Нельзя убрать последнего владельца.');
       if (user.role && !ROLES[user.role]) err('Неизвестная роль.','VALIDATION');
+      if (user.extraRoles && !Array.isArray(user.extraRoles)) err('Неверный список ролей.', 'VALIDATION');
       if (user.extraRoles) user.extraRoles = [...new Set(user.extraRoles.filter(r => ROLES[r]))].slice(0,4);
       const { pass:newPass, ...rest } = user;
-      if (newPass && String(newPass).length < 6) err('Пароль — минимум 6 символов.','VALIDATION');
+      if (newPass && (String(newPass).length < 10 || String(newPass).length>1024)) err('Пароль — минимум 10 символов.','VALIDATION');
       /* Безопасность: берём только разрешённые поля — служебные (salt, passHash, notify и т.п.) через сохранение сотрудника не меняются.
          Статус заявки меняется только через approveUser/rejectUser, где чистятся уведомления. */
       const ALLOWED_USER_FIELDS = ['fullName','phone','email','login','role','extraRoles','active','color','avatar'];
       const clean = {}; ALLOWED_USER_FIELDS.forEach(k => { if (k in rest) clean[k] = rest[k]; });
       const next = { ...old, ...clean }; if (newPass) setPass(next, newPass);
+      if (opts.dropAllFor && (newPass || clean.active===false || 'role' in clean || 'extraRoles' in clean)) opts.dropAllFor(old.id, db);
       if (user.fullName) next.name = shortName(user.fullName);
       /* Совмещение «тренер»: держим связанную запись в списке тренеров, чтобы человек считался в категории «Тренеры»
          (ставки и выплаты за занятия идут по id этой записи и не теряются при снятии/возврате совмещения) */
@@ -1066,11 +1135,12 @@ function createServer(opts){
     /* Отчёт смены: видят все, сдаёт и правит только тот, кто стоит в графике на эту дату.
        В рабочей версии Apps Script дописывает отчёт в Google Документ и кладёт фото чека в папку на Google Диске. */
     saveReport({ r }, u){
+      const existingReport = db.reports.find(x=>x.date===r.date);
       const onShift = db.schedule.some(x => x.date===r.date && x.adminId===u.id);
       if (!onShift && !isOwner(u)) err('Отчёт за этот день может сдать только администратор, который работает в эту смену по графику.');
       if (!r.photo) err('Прикрепите фото чека — без него отчёт не сохранится.','VALIDATION');
       /* Безопасность: фото — только встроенное изображение, никаких посторонних данных */
-      if (!/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);(?:base64|utf8),/i.test(r.photo)) err('Формат фото не поддерживается. Нужен JPG или PNG.','VALIDATION');
+      if (r.photo!==existingReport?.photo && !(opts.onReport ? /^data:image\/(?:png|jpeg|webp);base64,/.test(r.photo) : /^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);(?:base64|utf8),/i.test(r.photo))) err('Формат фото не поддерживается. Нужен JPG или PNG.','VALIDATION');
       const fields = db.settings.reportFields || DEFAULT_REPORT_FIELDS; const values = {};
       fields.forEach(f => { const v = (r.values||{})[f.k]; values[f.k] = f.type==='text' ? String(v||'').slice(0,300) : Math.max(0, Math.round(Number(v)||0)); });
       const dayTasks = db.tasks.filter(t => t.due===r.date && t.level==='team' && t.status!=='cancel');
@@ -1085,11 +1155,12 @@ function createServer(opts){
       if (rt && rt.status!=='done'){ Object.assign(rt, { status:'done', progress:100, doneBy:u.id, doneAt:nowIso(), late: new Date() > new Date(`${rt.due}T${rt.dueTime}:00`) }); }
       if (opts.onReport) rec = opts.onReport(rec, db) || rec;
       if (old) db.reports[db.reports.indexOf(old)] = rec; else db.reports.push(rec);
-      if (!save()){ err('Фото не поместилось в хранилище браузера (ограничение прототипа). Сделайте снимок меньше.','QUOTA'); }
+      save();
       return { report:rec, task: rt || null };
     },
     saveReportFields({ fields }, u){
       if (!isOwner(u)) err('Поля отчёта меняет владелец.');
+      if (!Array.isArray(fields) || fields.length>40 || fields.some(f=>f.k && !/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(f.k))) err('Неверные поля отчёта.', 'VALIDATION');
       const seen = new Set();
       const list = (fields||[]).map(f => ({ k: f.k || uid('rf'), label:String(f.label||'').trim().slice(0,80), emoji:String(f.emoji||'').slice(0,4), type: REPORT_TYPES[f.type] ? f.type : 'count',
         inTotal: f.type==='money' && !!f.inTotal, ...(f.attachTo ? { attachTo:f.attachTo } : {}) })).filter(f => f.label && !seen.has(f.k) && seen.add(f.k));
@@ -1230,7 +1301,7 @@ function createServer(opts){
       if (fullName.split(' ').length < 2) err('Укажите фамилию и имя.','VALIDATION');
       if (!ROLES[user.role]) err('Выберите роль.','VALIDATION');
       if (!login) err('Укажите почту или логин для входа.','VALIDATION');
-      if (String(user.pass||'').length < 6) err('Временный пароль — минимум 6 символов.','VALIDATION');
+      if (String(user.pass||'').length < 10) err('Временный пароль — минимум 10 символов.','VALIDATION');
       if (db.users.some(x => (x.login && x.login.toLowerCase()===login) || (email && x.email && x.email.toLowerCase()===email))) err('Такой логин или почта уже есть.','VALIDATION');
       if (user.phone && db.users.some(x => normPhone(x.phone) && normPhone(x.phone)===normPhone(user.phone))) err('Такой телефон уже есть.','VALIDATION');
       const palette = ['#899C84','#CCC1FF','#EBCB8B','#9FC3BE','#E8B4C4','#B9C7A6','#D6CBB5'];
@@ -1269,6 +1340,7 @@ function createServer(opts){
       const src = settings && typeof settings==='object' ? settings : {};
       const ALLOWED_SETTINGS = ['shiftRates','reportFields','yandexOrgId','twogisFirmId','twogisCity'];
       const clean = {}; ALLOWED_SETTINGS.forEach(k => { if (k in src) clean[k] = src[k]; });
+      if (clean.reportFields && (!Array.isArray(clean.reportFields) || clean.reportFields.length>40 || clean.reportFields.some(f=>!f || !/^[a-zA-Z][a-zA-Z0-9_]{0,40}$/.test(f.k) || !['money','count','text'].includes(f.type)))) err('Неверные поля отчёта.', 'VALIDATION');
       db.settings = { ...db.settings, ...clean }; save(); return db.settings;
     },
     /* --- Продажи и зарплата админов --- */
@@ -1361,6 +1433,19 @@ function createServer(opts){
   const PUBLIC = ['login','register','requestReset','confirmReset', ...(opts.publicActions||[])];
   function callSync(action, payload, token){
     if (!db || opts.reload) load();
+    const validate = (v, depth=0) => {
+      if (typeof v==='string' && v.length>2000000) err('Слишком длинное поле.', 'VALIDATION');
+      if (Array.isArray(v) && v.length>10000) err('Слишком большой список.', 'VALIDATION');
+      if (depth>30) err('Слишком сложная структура данных.', 'VALIDATION');
+      if (v && typeof v==='object') Object.keys(v).forEach(k => {
+        if (['__proto__','constructor','prototype'].includes(k)) err('Недопустимое поле.', 'VALIDATION');
+        if ((k==='id' || /Id$/.test(k)) && typeof v[k]==='string' && !/^[A-Za-z0-9_.:@-]{0,160}$/.test(v[k])) err('Недопустимый идентификатор.', 'VALIDATION');
+        validate(v[k], depth+1);
+      });
+    };
+    validate(payload);
+    if (payload && 'month' in payload && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(payload.month))) err('Неверный месяц.', 'VALIDATION');
+    ['key','adminId','trainerId'].forEach(k => { if (payload && ['__proto__','constructor','prototype'].includes(payload[k])) err('Недопустимый идентификатор.', 'VALIDATION'); });
     const h = Object.prototype.hasOwnProperty.call(handlers, action) ? handlers[action] : null;
     if (!h) err('Неизвестное действие: '+action,'BAD_REQUEST');
     const u = PUBLIC.includes(action) ? null : me(token);
@@ -1409,6 +1494,7 @@ const DemoServer = createServer({
   /* false — только если в хранилище браузера кончилось место (фото в гайде) */
   save(db){ try { localStorage.setItem(DEMO_KEY, JSON.stringify(db)); return true; } catch(e){ return !(e && (e.name==='QuotaExceededError' || e.code===22)); } },
   seed: () => buildSeed(),
+  reload: true,
   delay: 60
 });
 
@@ -1423,9 +1509,9 @@ const Api = {
       if (!CONFIG.API_URL) throw Object.assign(new Error('Не указан адрес сервера (CONFIG.API_URL).'), { code:'CONFIG' });
       const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 20000);
       // text/plain — чтобы браузер не делал предварительный CORS-запрос, Apps Script его не поддерживает
-      const res = await fetch(CONFIG.API_URL, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action, payload, token:this.token }), signal:ctrl.signal });
-      clearTimeout(tm);
+      let res;
+      try { res = await fetch(CONFIG.API_URL, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action, payload, token:this.token }), signal:ctrl.signal }); } finally { clearTimeout(tm); }
       if (res.status===429) throw Object.assign(new Error('Слишком много запросов. Подождите минуту и повторите.'), { code:'LIMIT' });
       if (!res.ok) throw Object.assign(new Error(`Сервер ответил ошибкой ${res.status}. Повторите через минуту.`), { code:'HTTP' });
       const data = await res.json();
@@ -1451,7 +1537,7 @@ const S = { user:null, data:null, view:'day', date:todayStr(), person:'all', lev
   payMonth:todayStr().slice(0,7), salMonth:todayStr().slice(0,7), finMonth:todayStr().slice(0,7), salAdmin:'', revFilter:'all', guideDraft:null, guideQuery:'',
   expanded:{ ongoing:false }, modal:null, busy:false, lastBadges:new Map(), loginPick:'', authMode:'login',
   navOpen:'', /* какая группа верхней навигации раскрыта (группировка вкладок) */ salPresetKind:'staff', copyMonthFrom:'',
-  contactQuery:'', /* поиск в «Важных контактах» */
+  inventoryQuery:'', inventoryKind:'all', contactQuery:'', /* поиск в «Важных контактах» */
   resetLogin:'', resetMsg:'', resetDemo:'' /* экран «Забыли пароль?»: логин, сообщение о доставке, код демо-режима */ }; /* salPresetKind — тип пресета ставок в «Продажах и зарплате» */
 
 const Auth = {
@@ -1468,7 +1554,9 @@ const Auth = {
 };
 
 async function loadAll(){
+  const token=Api.token;
   const d = await Api.call('bootstrap');
+  if (token!==Api.token) return;
   S.data = d; S.user = d.user;
   render(); setTimeout(pushNew, 1200);
 }
@@ -1564,6 +1652,7 @@ function getTabsList(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   return [
     ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'], ['contacts','Контакты'],
+    ...(Rules.canUseInventory(S.user) ? [['inventory','Расходники и товары']] : []),
     ...(Rules.canSeePayroll(S.user) ? [['sal','Продажи и зарплата']] : []),
     ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
     ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
@@ -1579,7 +1668,7 @@ const NAV_GROUPS = [
   { k:'work',  label:'Работа',     tabs:['day','sched','rep','cal'] },
   { k:'pulse', label:'Показатели', tabs:['stats','rev'] },
   { k:'money', label:'Деньги',     tabs:['pay','sal','fin'] },
-  { k:'know',  label:'База',       tabs:['guide','contacts'] },   /* знания студии + важные контакты */
+  { k:'know',  label:'База',       tabs:['guide','contacts','inventory'] },   /* знания студии + важные контакты */
   { k:'team',  label:'Команда',    tabs:['team'] }
 ];
 /* Собираем группы из видимых вкладок (используется и мобильной шторкой «Ещё») */
@@ -1691,11 +1780,12 @@ function switchTab(targetView){
 
     updateBannersState();
 
-    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
+    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
     if (views[S.view]) {
       mainEl.innerHTML = views[S.view]();
     }
-    root.querySelectorAll('input[type=range].rng').forEach(paintRange);
+    hydratePrivatePhotos();
+  root.querySelectorAll('input[type=range].rng').forEach(paintRange);
     if (S.view === 'fin') bindCsvImport();
     /* Синхронизируем кеш отрисовки: иначе ближайшая плановая перерисовка (раз в минуту)
        заново перестроила бы всю страницу и «моргнула» после каждого переключения вкладки */
@@ -1717,7 +1807,7 @@ function buildAppHtml(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
-  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
+  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
   const unread = unreadCount();
   return `
     <header class="top">
@@ -1730,8 +1820,9 @@ function buildAppHtml(){
       </div>
     </header>
     <nav class="tabs-scroll" aria-label="Разделы"><div class="tabs nav-groups" role="tablist">${navGroupsHtml()}</div></nav>
-    ${S.data.build > BUILD ? `<div class="banner upd" role="status"><div><b>Доступна новая версия панели.</b> <span class="muted small">Нажмите «Обновить» — или замените файлы на хостинге, если кнопка не помогает.</span></div><button class="btn sm primary" data-act="upd-reload">Обновить</button></div>` : ''}
-    ${(!S.data.build || S.data.build < BUILD) ? `<div class="banner upd" role="status"><div><b>Сервер панели старее приложения: новых функций не будет.</b> <span class="muted small">Замените Code.gs в Apps Script и сделайте «Управление развертываниями → Изменить → Новая версия».</span></div></div>` : ''}
+    ${S.data.build > BUILD ? `<div class="banner upd" role="status"><div><b>Доступна новая версия панели (на сервере v${S.data.build}, у вас v${BUILD}).</b> <span class="muted small">Нажмите «Обновить» — или замените файлы на хостинге, если кнопка не помогает.</span></div><button class="btn sm primary" data-act="upd-reload">Обновить</button></div>` : ''}
+    ${(!Number.isInteger(S.data.build)) ? '<div class="banner upd" role="status">Сервер не сообщил версию. Проверьте API_URL и публикацию Code.gs; доступность новых разделов определяется возможностями сервера.</div>' : ''}
+    ${(Number.isInteger(S.data.build) && S.data.build < CORE_BUILD) ? `<div class="banner upd" role="status"><div><b>Сервер панели старее приложения: новых функций не будет — на сервере ${S.data.build ? 'v' + S.data.build : 'версия не сообщается'}, панель ждёт v${BUILD}.</b> <span class="muted small">Проверка: откройте в браузере адрес из config.js (API_URL) — должно быть «сборка ${BUILD}». Если ответ старый: Apps Script → «Развернуть → Управление развертываниями → Изменить → Версия: Новая версия → Развернуть».</span></div></div>` : ''}
     ${pend && S.view!=='team' ? `<div class="banner info" role="status"><div><b>Новые заявки на доступ: ${pend}.</b> <span class="muted small">Сотрудник войдёт в панель только после вашего подтверждения.</span></div><button class="btn sm primary" data-act="view" data-v="team">Посмотреть</button></div>` : ''}
     ${over && ['day','cal','stats'].includes(S.view) && !S.overdueOnly ? `<div class="banner" role="alert"><div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><div><b>Внимание: есть просроченные задачи — ${over}.</b> <span class="muted small">Невыполненное переносится на сегодня, пока его не закроют.</span></div></div><button class="btn sm" data-act="show-overdue">Показать просроченные</button></div>` : ''}
     <main>${views[S.view]()}</main>
@@ -1753,8 +1844,27 @@ function render(){
   root.innerHTML = html;
   keep.forEach(el => root.appendChild(el));
   if (scY > 0) window.scrollTo(0, Math.min(scY, document.body?.scrollHeight || 1e9));
+  hydratePrivatePhotos();
   root.querySelectorAll('input[type=range].rng').forEach(paintRange);
   if (S.view === 'fin') bindCsvImport();
+}
+
+/* Не сохраняем приватные фото в localStorage, service worker или публичном Диске. */
+function hydratePrivatePhotos(){
+  const token=Api.token;
+  const images=[...root.querySelectorAll('img[data-private-photo]')];
+  let cursor=0;
+  const worker=async()=>{
+    while(cursor<images.length){
+      const img=images[cursor++];
+      try {
+        const r=await Api.call('getPrivatePhoto',{id:img.dataset.privatePhoto});
+        if (Api.token!==token || !S.user) return;
+        if (img.isConnected && safeImg(r.photo)) { img.src=r.photo; delete img.dataset.privatePhoto; }
+      } catch(e) { if (img.isConnected) img.alt='Фото недоступно. Обновите панель.'; }
+    }
+  };
+  for(let i=0;i<Math.min(3,images.length);i++) worker();
 }
 
 /* --- Вход и регистрация --- */
@@ -1780,7 +1890,7 @@ function viewLogin(){
       <div class="field"><label for="fg2-login">Логин, почта или телефон</label><input class="input" id="fg2-login" autocomplete="username" required value="${esc(S.resetLogin)}"></div>
       <div class="grid2">
         <div class="field"><label for="fg2-code">Код из сообщения</label><input class="input" id="fg2-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required placeholder="6 цифр" autocomplete="one-time-code"></div>
-        <div class="field"><label for="fg2-p1">Новый пароль</label><input class="input" id="fg2-p1" type="password" autocomplete="new-password" minlength="6" required></div></div>
+        <div class="field"><label for="fg2-p1">Новый пароль</label><input class="input" id="fg2-p1" type="password" autocomplete="new-password" minlength="10" required></div></div>
       <div id="fg2-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="fg2-btn">Сменить пароль</button>
       <button class="btn ghost" type="button" data-act="auth-mode" data-m="forgot">← Отправить код заново</button>
@@ -1797,8 +1907,8 @@ function viewLogin(){
         ${Object.entries(ROLES).map(([k,v],i) => `<label class="chip${(S.regRole||'admin')===k?' on':''}"><input type="radio" name="rg-role" value="${k}"${(S.regRole||'admin')===k?' checked':''} hidden>${v}</label>`).join('')}</div></div>
       <div class="grid2"><div class="field"><label for="rg-phone">Телефон</label><input class="input" id="rg-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 123-45-67" required></div>
       <div class="field"><label for="rg-mail">Почта</label><input class="input" id="rg-mail" type="email" autocomplete="email" placeholder="name@mail.ru" required></div>
-      <div class="field"><label for="rg-p1">Пароль</label><input class="input" id="rg-p1" type="password" autocomplete="new-password" minlength="6" required></div>
-      <div class="field"><label for="rg-p2">Пароль ещё раз</label><input class="input" id="rg-p2" type="password" autocomplete="new-password" minlength="6" required></div></div>
+      <div class="field"><label for="rg-p1">Пароль</label><input class="input" id="rg-p1" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div class="field"><label for="rg-p2">Пароль ещё раз</label><input class="input" id="rg-p2" type="password" autocomplete="new-password" minlength="10" required></div></div>
       <label class="small" style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="rg-agree" required style="margin-top:3px;accent-color:var(--accent)">Согласен(на) на обработку персональных данных для работы в панели студии</label>
       <div id="rg-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="rg-btn">Отправить заявку</button>
@@ -2176,7 +2286,7 @@ function viewGuide(){
       ${can?'<button class="btn" data-act="guide-import">Загрузить из Word</button><button class="btn primary" data-act="guide-new">+ Инструкция</button>':''}</div>
     ${can ? `<p class="small muted">Заготовки помечены «черновик». Инструкции можно загрузить из файла Word (.docx) вместе с фотографиями: заголовок в документе станет названием инструкции, пункты и абзацы под ним — шагами, фото прикрепятся к шагу, рядом с которым стоят.</p>` : ''}
     <div>${list.map(g => editing && editing.id===g.id ? guideEditor() : `<details class="acc"${q?' open':''}><summary>${esc(g.title)} ${g.draft?'<span class="draft">черновик</span>':''}${normSteps(g).some(x=>x.img)?'<span class="tag">с фото</span>':''}<span class="chev">›</span></summary>
-      <div class="body"><ol>${normSteps(g).map(st => `<li><div class="step">${st.t?`<span>${esc(st.t)}</span>`:''}${st.img?`<img class="step-img" src="${safeImg(st.img)}" alt="Фото к шагу" loading="lazy" data-act="zoom">`:''}</div></li>`).join('')}</ol>
+      <div class="body"><ol>${normSteps(g).map(st => `<li><div class="step">${st.t?`<span>${esc(st.t)}</span>`:''}${st.img?`<img class="step-img" ${photoAttrs(st.img)} alt="Фото к шагу" loading="lazy" data-act="zoom">`:''}</div></li>`).join('')}</ol>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span class="small muted">${g.updatedBy?'Обновил(а) '+esc(nameOf(g.updatedBy))+', '+fmtDT(g.updatedAt):'Заготовка'}${g.sourceFile?' · из файла '+esc(g.sourceFile):''}</span>${can?`<button class="btn sm" data-act="guide-edit" data-id="${g.id}">Редактировать</button>`:''}</div></div></details>`).join('')}
     ${editing && !editing.id ? guideEditor() : ''}
     ${!list.length && !(editing && !editing.id) ? '<div class="empty">Ничего не найдено.</div>' : ''}</div></div>`;
@@ -2187,7 +2297,7 @@ function guideEditor(){
     <div class="field"><span class="small muted" style="font-weight:600">Шаги (до ${CONFIG.GUIDE_MAX_STEPS}) — к каждому можно приложить фото</span>
     <div style="display:flex;flex-direction:column;gap:10px">${g.steps.map((st,i) => `<div class="step-row"><span class="step-n">${i+1}</span>
       <textarea class="input" rows="2" data-gstep="${i}" aria-label="Шаг ${i+1}" placeholder="Что сделать">${esc(st.t)}</textarea>
-      <div class="step-media">${st.img ? `<img src="${safeImg(st.img)}" alt="Фото к шагу ${i+1}"><button type="button" class="btn ghost sm" data-act="step-img-del" data-i="${i}">убрать фото</button>`
+      <div class="step-media">${st.img ? `<img ${photoAttrs(st.img)} alt="Фото к шагу ${i+1}"><button type="button" class="btn ghost sm" data-act="step-img-del" data-i="${i}">убрать фото</button>`
         : `<label class="btn sm">Фото<input type="file" accept="image/*" data-gimg="${i}" hidden></label>`}</div>
       <button type="button" class="iconbtn" data-act="step-del" data-i="${i}" aria-label="Удалить шаг ${i+1}">✕</button></div>`).join('')}</div>
     ${g.steps.length < CONFIG.GUIDE_MAX_STEPS ? '<button type="button" class="btn sm" data-act="step-add" style="align-self:flex-start">+ Шаг</button>' : ''}</div>
@@ -2233,7 +2343,7 @@ function compressImg(src){
     im.onload = () => { const k = Math.min(1, CONFIG.IMG_MAX_SIDE / Math.max(im.naturalWidth, im.naturalHeight)); const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(im.naturalWidth*k)); c.height = Math.max(1, Math.round(im.naturalHeight*k)); const x = c.getContext('2d');
       x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(im, 0, 0, c.width, c.height);
-      try { res(c.toDataURL('image/jpeg', 0.78)); } catch(e){ res(src); } };
+      try { res(c.toDataURL('image/jpeg', 0.78)); } catch(e){ res(''); } };
     im.onerror = () => res(''); // форматы, которые браузер не показывает (EMF/WMF), пропускаем
     im.src = src;
   });
@@ -2331,6 +2441,51 @@ function viewTeam(){
 }
 
 /* --- Важные контакты (раздел «База»): тренера · коллаборации · поставщики и услуги --- */
+/* УЧЁТ РАСХОДНИКОВ И ТОВАРОВ. Превью ограничено 160 px; большое фото
+   загружается только по нажатию, через авторизованный API, без публичных ссылок. */
+const inventoryReady = () => (S.data.capabilities||[]).includes('inventory-v1');
+function viewInventory(){
+  if (!Rules.canUseInventory(S.user)) return '<p>Нет доступа к учёту.</p>';
+  if (!inventoryReady()) return '<div class="card"><h3>Учёт расходников и товаров</h3><p>Для этой вкладки требуется сервер v6. Опубликуйте новую версию Code.gs по инструкции UPDATE.md из проекта.</p></div>';
+  const query = S.inventoryQuery.toLocaleLowerCase('ru');
+  const items = (S.data.inventory||[]).filter(x => (S.inventoryKind==='all' || x.kind===S.inventoryKind) && `${x.name} ${x.note}`.toLocaleLowerCase('ru').includes(query));
+  return `<div class="section-head"><h2>Расходники и товары</h2><button class="btn primary" data-act="inventory-edit">+ Добавить позицию</button></div>
+    <div class="inventory-filters"><label>Поиск<input class="input" id="inventory-query" type="search" value="${esc(S.inventoryQuery)}" placeholder="Название или заметка"></label><label>Вид<select class="input" id="inventory-kind">${[['all','Все позиции'],['supply','Расходники'],['product','Товары']].map(([k,v])=>`<option value="${k}"${S.inventoryKind===k?' selected':''}>${v}</option>`).join('')}</select></label></div>
+    <p class="small muted">Позиций: ${items.length}. Количество — текущий остаток. Дата изменения и сотрудник фиксируются автоматически.</p>
+    <div class="inventory-grid">${items.map(x=>`<article class="card inventory-card">
+      ${x.hasPhoto ? `<button class="inventory-photo" data-act="inventory-photo" data-id="${esc(x.id)}" aria-label="Открыть фото: ${esc(x.name)}"><img loading="lazy" width="160" height="160" src="${safeImg(x.thumbnail)}" alt="${esc(x.name)}"></button>` : '<div class="inventory-no-photo" aria-label="Нет фотографии">Нет фото</div>'}
+      <div class="inventory-info"><span class="small muted">${x.kind==='supply'?'Расходник':'Товар'}</span><h3>${esc(x.name)}</h3><b>${fmtN(x.quantity)} ${esc(x.unit)}</b>
+      <p class="small">Закупка: ${esc(x.purchasedAt)}<br>Внесено: ${esc(fmtDT(x.createdAt))}<br>Изменено: ${esc(fmtDT(x.updatedAt))} · ${esc(nameOf(x.updatedBy))}</p>
+      ${x.note?`<p class="small inventory-note">${esc(x.note)}</p>`:''}<button class="btn sm" data-act="inventory-edit" data-id="${esc(x.id)}">Изменить</button></div></article>`).join('') || '<div class="card muted">Позиции не найдены. Добавьте первую позицию или измените поиск.</div>'}</div>`;
+}
+function inventoryModal(m){
+  const x = m.item;
+  return `<div class="overlay" data-act="close-bg"><form class="modal" id="inventory-form" style="max-width:560px"><div class="modal-h"><h3>${x.id?'Изменить позицию':'Новая позиция'}</h3>${closeX}</div>
+    <div class="field"><label for="iv-name">Название</label><input class="input" id="iv-name" value="${esc(x.name||'')}" maxlength="120" required></div>
+    <div class="field"><label for="iv-kind">Вид</label><select class="input" id="iv-kind"><option value="supply">Расходник</option><option value="product"${x.kind==='product'?' selected':''}>Товар</option></select></div>
+    <div class="field"><label for="iv-quantity">Текущий остаток</label><input class="input" id="iv-quantity" type="number" min="0" max="1000000000" step="any" value="${esc(x.quantity??0)}" required></div>
+    <div class="field"><label for="iv-unit">Единица измерения</label><input class="input" id="iv-unit" maxlength="20" value="${esc(x.unit||'шт.')}" required></div>
+    <div class="field"><label for="iv-purchased">Дата закупки</label><input class="input" id="iv-purchased" type="date" max="${todayStr()}" value="${esc(x.purchasedAt||todayStr())}" required></div>
+    <div class="field"><label for="iv-note">Заметка</label><textarea class="input" id="iv-note" maxlength="500">${esc(x.note||'')}</textarea></div>
+    <div class="field"><label for="iv-file">Фотография (JPEG, PNG или WebP, до 15 МБ)</label><input class="input" id="iv-file" type="file" accept="image/jpeg,image/png,image/webp"><p class="small muted">Фото автоматически уменьшается до 1000 px; нажмите превью в списке, чтобы рассмотреть.</p>
+    <div id="iv-preview">${x.thumbnail?`<img class="inventory-thumb" src="${safeImg(x.thumbnail)}" alt="Превью">`:''}</div><button type="button" class="btn sm" data-act="inventory-remove-photo">Убрать фото</button></div>
+    <p class="small muted">${x.updatedAt?`Последнее изменение: ${esc(fmtDT(x.updatedAt))}`:'Дата внесения появится после сохранения.'}</p>
+    <div class="modal-f">${x.id && Rules.canDeleteInventory(S.user)?`<button type="button" class="btn danger" data-act="inventory-delete" data-id="${esc(x.id)}">Удалить</button>`:''}<span class="spacer"></span><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" id="iv-save" type="submit">Сохранить</button></div></form></div>`;
+}
+async function inventoryImages(file){
+  if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size>15*1024*1024) throw new Error('Выберите JPEG, PNG или WebP размером до 15 МБ.');
+  const src = await new Promise((resolve,reject)=>{ const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.onerror=()=>reject(new Error('Не удалось прочитать файл.')); fr.readAsDataURL(file); });
+  const img = await new Promise((resolve,reject)=>{ const i=new Image(); i.onload=()=>resolve(i); i.onerror=()=>reject(new Error('Не удалось открыть фотографию.')); i.src=src; });
+  if (img.width*img.height>50000000) throw new Error('Слишком большое разрешение. Уменьшите фото до 50 мегапикселей.');
+  const encode = (side,quality) => { const k=Math.min(1,side/Math.max(img.width,img.height)); const c=document.createElement('canvas'); c.width=Math.max(1,Math.round(img.width*k)); c.height=Math.max(1,Math.round(img.height*k)); const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); ctx.drawImage(img,0,0,c.width,c.height); return c.toDataURL('image/jpeg',quality); };
+  let photo=encode(1000,0.75);
+  if (photo.length>350000) photo=encode(800,0.6);
+  if (photo.length>350000) photo=encode(600,0.5);
+  const thumbnail=encode(160,0.6);
+  if (photo.length>350000 || thumbnail.length>24000) throw new Error('Не удалось сжать фото. Выберите другой снимок.');
+  return { photo, thumbnail };
+}
+
 const CONTACT_CATS = { trainer:'Тренеры', collab:'Коллаборации', vendor:'Поставщики и услуги', other:'Прочее' };
 function viewContacts(){
   const canEdit = Rules.canEditContacts(S.user);
@@ -2375,16 +2530,18 @@ function viewContacts(){
 const closeX = '<button type="button" class="iconbtn" data-act="close" aria-label="Закрыть">✕</button>';
 function renderModal(){
   const m = S.modal;
+  if (m.type==='inventory') return inventoryModal(m);
+  if (m.type==='inventory-photo') return `<div class="overlay" data-act="close-bg"><div class="modal"><div class="modal-h"><h3>Фото позиции</h3>${closeX}</div><img class="inventory-full" src="${safeImg(m.photo)}" alt="Фотография позиции"></div></div>`;
   if (m.type==='task') return taskModal(m);
   if (m.type==='export') return exportModal(m);
   if (m.type==='pass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="pass-form" data-id="${m.id}" style="max-width:420px"><div class="modal-h"><h3>Новый пароль · ${esc(nameOf(m.id))}</h3>${closeX}</div>
-    <div class="field"><label for="pw-1">Пароль (от 6 символов)</label><input class="input" id="pw-1" type="password" minlength="6" required autocomplete="new-password"></div>
+    <div class="field"><label for="pw-1">Пароль (от 10 символов)</label><input class="input" id="pw-1" type="password" minlength="10" required autocomplete="new-password"></div>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
   /* Смена СВОЕГО пароля (профиль → «Сменить пароль») */
   if (m.type==='changepass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="changepass-form" style="max-width:420px"><div class="modal-h"><h3>Сменить мой пароль</h3>${closeX}</div>
     <div class="field"><label for="cp-0">Старый пароль</label><input class="input" id="cp-0" type="password" autocomplete="current-password" required></div>
-    <div class="field"><label for="cp-1">Новый пароль (от 6 символов)</label><input class="input" id="cp-1" type="password" minlength="6" autocomplete="new-password" required></div>
-    <div class="field"><label for="cp-2">Новый пароль ещё раз</label><input class="input" id="cp-2" type="password" minlength="6" autocomplete="new-password" required></div>
+    <div class="field"><label for="cp-1">Новый пароль (от 10 символов)</label><input class="input" id="cp-1" type="password" minlength="10" autocomplete="new-password" required></div>
+    <div class="field"><label for="cp-2">Новый пароль ещё раз</label><input class="input" id="cp-2" type="password" minlength="10" autocomplete="new-password" required></div>
     <p class="small muted">После смены пароля все другие устройства, где вы были в панели, попросят вход заново.</p>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сменить</button></div></form></div>`;
   /* Важные контакты: добавление/редактирование */
@@ -3229,7 +3386,7 @@ function viewRep(){
   if (S.repEdit && canEdit) main = reportForm(date, rep, tDone, tt.length);
   else if (rep) main = `<div class="card rep-card"><div class="card-h"><h3>Отчёт за ${fmtDay(date)}</h3><span class="badge b-done">сдан</span></div>
       <div class="rep-wrap"><pre class="rep-text">${esc(reportText(rep))}</pre>
-      <figure class="rep-photo"><img src="${esc(rep.photo)}" alt="Фото чека за ${fmtDay(date)}" data-act="zoom"><figcaption class="small muted">${esc(rep.photoName||`Чек_${date}.jpg`)} · нажмите, чтобы увеличить</figcaption></figure></div>
+      <figure class="rep-photo"><img ${photoAttrs(rep.photo)} alt="Фото чека за ${fmtDay(date)}" data-act="zoom"><figcaption class="small muted">${esc(rep.photoName||`Чек_${date}.jpg`)} · нажмите, чтобы увеличить</figcaption></figure></div>
       <p class="small muted">Сдал(а) ${esc(nameOf(rep.createdBy))}${rep.updatedBy && rep.updatedBy!==rep.createdBy?`, изменил(а) ${esc(nameOf(rep.updatedBy))}`:''} · ${fmtDT(rep.updatedAt)}.</p>
       <p class="small drive">${CONFIG.MODE==='demo'?'В рабочей версии сохраняется: ':'Сохранено: '}${esc(driveNote(date))}</p>
       <div class="modal-f"><button class="btn" data-act="rep-copy">Скопировать текст для чата</button>${canEdit?`<button class="btn primary" data-act="rep-edit">${mine?'Изменить':'Исправить (владелец)'}</button>`:''}</div></div>`;
@@ -3261,7 +3418,7 @@ function reportForm(date, rep, tDone, tTotal){
     <div class="rep-sec"><span class="eyebrow">Задачи</span><p>4️⃣ Задач выполнено <b>${tDone} из ${tTotal}</b> <span class="small muted">— по чек-листу команды, обновится при сохранении</span></p></div>
     ${other.length ? `<div class="rep-sec"><span class="eyebrow">Касса и прочее</span><div class="grid2">${other.map(fld).join('')}</div></div>` : ''}
     <div class="rep-sec"><span class="eyebrow">Фото чека — обязательно</span>
-      <div class="photo-in">${r.photo ? `<img src="${esc(r.photo)}" alt="Фото чека" data-act="zoom"><button type="button" class="btn sm ghost" data-act="rp-photo-del">Заменить</button>`
+      <div class="photo-in">${r.photo ? `<img ${photoAttrs(r.photo)} alt="Фото чека" data-act="zoom"><button type="button" class="btn sm ghost" data-act="rp-photo-del">Заменить</button>`
         : `<label class="dropzone small-dz" for="rp-photo"><b>Сфотографировать или выбрать чек</b><span class="small muted">Сохранится как «Чек_${date}.jpg»</span><input type="file" id="rp-photo" accept="image/*" capture="environment" hidden></label>`}</div></div>
     <div class="field"><label for="rp-comment">Комментарий (необязательно)</label><textarea class="input" id="rp-comment" data-rp-c="1" rows="2">${esc(r.comment)}</textarea></div>
     <div class="modal-f"><button type="button" class="btn" data-act="rep-cancel">Отмена</button><button class="btn primary" type="submit">${rep?'Сохранить изменения':'Сдать отчёт'}</button></div></form>`;
@@ -3422,7 +3579,7 @@ function reportTasks(){
   return [...b.carried, ...b.recurring, ...b.dueToday];
 }
 function csvFor(kind){
-  const sep = ';'; const q = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  const sep = ';'; const q = v => `"${String(sheetText(v??'')).replace(/"/g,'""')}"`;
   if (kind==='stats'){
     const rows = loadRows(); const ws = weeklySeries();
     return '﻿' + [['Сотрудник','Создал','Выполнил','Открыто','Просрочено'].join(sep), ...rows.map(r => [r.u.name,r.created,r.done,r.open,r.over].map(q).join(sep)),
@@ -3650,6 +3807,24 @@ const blankTask = extra => ({ id:'', title:'', desc:'', level: isPureSmm(S.user)
 const finMonthData = () => S.data.finance[S.finMonth];
 async function saveFin(data){ S.data.finance = await Api.call('saveFinance', { month:S.finMonth, data }); }
 
+root.addEventListener('change', async e=>{
+  const el=e.target;
+  if (el.id==='inventory-query' || el.id==='inventory-kind') {
+    S.inventoryQuery=document.getElementById('inventory-query').value;
+    S.inventoryKind=document.getElementById('inventory-kind').value; render(); return;
+  }
+  if (el.id!=='iv-file' || !el.files?.[0] || S.modal?.type!=='inventory') return;
+  const modal=S.modal; const read=modal.photoRead=(modal.photoRead||0)+1; modal.photoBusy=true;
+  document.getElementById('iv-save').disabled=true;
+  try {
+    const images=await inventoryImages(el.files[0]);
+    if (S.modal!==modal || modal.photoRead!==read) return;
+    Object.assign(modal.item,images);
+    const img=document.createElement('img'); img.className='inventory-thumb'; img.alt='Превью'; img.src=images.thumbnail;
+    document.getElementById('iv-preview').replaceChildren(img);
+  } catch(err){ if (S.modal===modal && modal.photoRead===read) { el.value=''; toast(err.message,true); } }
+  finally { if (S.modal===modal && modal.photoRead===read) { modal.photoBusy=false; document.getElementById('iv-save').disabled=false; } }
+});
 root.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const act = el.dataset.act, id = el.dataset.id;
@@ -3781,6 +3956,27 @@ root.addEventListener('click', e => {
     case 'toggle-user': run(async () => { const u = userById(id); const r = await Api.call('saveUser', { user:{ id, active:!u.active } }); replaceIn(S.data.users, r); render(); }, 'Доступ изменён'); break;
     case 'pass': S.modal = { type:'pass', id }; render(); document.getElementById('pw-1')?.focus(); break;
     /* ---------- Важные контакты ---------- */
+    case 'inventory-edit': {
+      const item = id ? (S.data.inventory||[]).find(x=>x.id===id) : {};
+      if (!item || !inventoryReady()) break;
+      S.modal={ type:'inventory', item:{ ...item } }; render(); break;
+    }
+    case 'inventory-photo': run(async()=>{
+      const session=Api.token; const r=await Api.call('getInventoryPhoto',{ id });
+      if (session!==Api.token || !S.user) return;
+      S.modal={ type:'inventory-photo', photo:r.photo }; render();
+    }); break;
+    case 'inventory-remove-photo': if (S.modal?.type==='inventory') {
+      S.modal.photoRead=(S.modal.photoRead||0)+1; S.modal.item.photo=''; S.modal.item.thumbnail=''; S.modal.photoBusy=false;
+      document.getElementById('iv-preview').replaceChildren(); document.getElementById('iv-file').value=''; document.getElementById('iv-save').disabled=false;
+    } break;
+    case 'inventory-delete': {
+      const item=S.modal.item;
+      S.modal={ type:'confirm', title:'Удалить позицию?', text:item.name, on:async()=>{
+        await Api.call('deleteInventory',{ id:item.id, expectedUpdatedAt:item.updatedAt });
+        S.data.inventory=S.data.inventory.filter(x=>x.id!==item.id); S.modal=null; render();
+      } }; render(); break;
+    }
     case 'contact-edit': { const c = id ? (S.data.contacts||[]).find(x => x.id===id) : null; S.modal = { type:'contact', c: c ? JSON.parse(JSON.stringify(c)) : null }; render(); document.getElementById('cf-name')?.focus(); break; }
     case 'contact-del': { const c = (S.data.contacts||[]).find(x => x.id===id); if (!c) break;
       S.modal = { type:'confirm', title:'Удалить контакт?', text:`«${c.name}» будет убран из важных контактов.`, yes:'Удалить',
@@ -4195,7 +4391,7 @@ root.addEventListener('submit', e => {
   }
   if (f.id==='pass-form'){
     const p = v('pw-1');
-    if (p.length < 6){ toast('Пароль — минимум 6 символов.', true); return; }
+    if (p.length < 10){ toast('Пароль — минимум 10 символов.', true); return; }
     run(async () => { await Api.call('saveUser', { user:{ id:f.dataset.id, pass:p } }); S.modal=null; render(); }, 'Пароль изменён');
     return;
   }
@@ -4209,6 +4405,14 @@ root.addEventListener('submit', e => {
     return;
   }
   /* --- Важные контакты --- */
+  if (f.id==='inventory-form'){
+    if (S.modal.photoBusy) { toast('Дождитесь обработки фотографии.',true); return; }
+    const original=S.modal.item;
+    const item={ ...original, name:v('iv-name'), kind:v('iv-kind'), quantity:v('iv-quantity'), unit:v('iv-unit'), purchasedAt:v('iv-purchased'), note:v('iv-note') };
+    run(async()=>{ const rec=await Api.call('saveInventory',{ item, expectedUpdatedAt:original.updatedAt });
+      S.data.inventory=S.data.inventory||[]; replaceIn(S.data.inventory,rec); S.modal=null; render();
+    }, 'Позиция сохранена'); return;
+  }
   if (f.id==='contact-form'){
     const cat = document.querySelector('input[name="cf-cat"]:checked')?.value || 'vendor';
     run(async () => { const r = await Api.call('saveContact', { contact:{ id:f.dataset.id || undefined, cat, name:v('cf-name'), type:v('cf-type'), phone:v('cf-phone'), tg:v('cf-tg'), email:v('cf-email'), note:v('cf-note') } });
@@ -4292,7 +4496,7 @@ async function refreshData(){
   }
   if (CONFIG.MODE!=='gas' || !S.user || S.busy || S.modal || document.visibilityState==='hidden') return;
   if (document.activeElement?.matches('input,textarea,select')) return;
-  try { const d = await Api.call('bootstrap'); if (S.modal || S.busy) return; S.data = d; S.user = d.user; render(); pushNew(); } catch(e){}
+  try { const token=Api.token; const d = await Api.call('bootstrap'); if (token!==Api.token || !S.user || S.modal || S.busy) return; S.data = d; S.user = d.user; render(); pushNew(); } catch(e){}
 }
 if (CONFIG.MODE==='gas'){
   setInterval(refreshData, Math.max(20, CONFIG.REFRESH_SEC||60) * 1000);
@@ -4340,7 +4544,7 @@ const Push = {
    Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
 if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
   S, Api, Auth, loadAll, render, buildAppHtml, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
-  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin },
+  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin },
   modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal(), shifts:shiftsModal, notifyset:notifySetModal },
   computeNotifications, shiftStatus, durStr,
   parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
