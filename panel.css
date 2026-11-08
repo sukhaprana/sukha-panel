@@ -658,3 +658,16 @@ body{background:var(--bg);color:var(--ink)}
 #sp-app .inventory-note{white-space:pre-wrap}
 #sp-app .inventory-thumb{width:120px;height:120px;object-fit:contain;border-radius:12px;margin:10px 0}
 #sp-app .inventory-full{display:block;width:100%;max-height:75vh;object-fit:contain}
+
+/* Финансовые журналы владельцев: на узком экране каждый сохраняет свою таблицу. */
+#sp-app .debt-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:14px 0}
+#sp-app .task-attachments{border-top:1px solid var(--line);padding-top:14px;margin:16px 0}
+#sp-app .attachment-row{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+#sp-app .attachment-row>div{flex:1;min-width:0;overflow-wrap:anywhere}
+#sp-app .attachment-row .small{display:block;margin-top:4px}
+#sp-app .attachment-pick{position:relative;overflow:hidden;margin-top:12px}
+#sp-app .attachment-pick input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+@media(max-width:850px){#sp-app .debt-columns{grid-template-columns:minmax(0,1fr)}}
+
+#sp-app .personal-debt .tbl{min-width:680px}
+#sp-app .personal-debt .tbl td:first-child,#sp-app .debt-columns .tbl td:first-child{white-space:nowrap}
