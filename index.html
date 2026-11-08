@@ -11,7 +11,7 @@
 <!-- Безопасность: ограничиваем, что может загружать страница (защита от внедрения чужих скриптов).
      Разрешены: свои файлы, CDN библиотек (html2pdf, mammoth, Firebase), шрифты Google и соединения с сервером.
      Если добавите новый CDN — допишите его в script-src/style-src. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://*.googleusercontent.com https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://fonts.googleapis.com https://fonts.gstatic.com; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <!-- Установка на телефон как приложение -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -26,16 +26,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="panel.css?v=6">
+<link rel="stylesheet" href="panel.css?v=7">
 <style>html,body{margin:0;background:#F7F6FB} #sp-app{min-height:100vh;padding-top:env(safe-area-inset-top)}</style>
 </head>
 <body>
 <!-- Место, куда рисуется панель -->
 <div id="sp-app"><div class="wrap" id="sp-root"></div></div>
-<!-- Настройки → код панели. ?v=6 — «ломает» кеш CDN и браузера: при следующей публикации
+<!-- Настройки → код панели. ?v=7 — «ломает» кеш CDN и браузера: при следующей публикации
      увеличьте цифру здесь (и VERSION в sw.js), чтобы все сразу получили свежие файлы -->
-<script src="config.js?v=6"></script>
-<script src="panel.js?v=6"></script>
+<script src="config.js?v=7"></script>
+<script src="panel.js?v=7"></script>
 <!-- Фоновый помощник: пуш-уведомления и работа при плохом интернете -->
 
 </body>
