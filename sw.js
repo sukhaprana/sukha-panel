@@ -5,15 +5,15 @@
                  Данные (задачи, отчёты) всегда берутся с сервера — офлайн их не подменяем.
    Можно менять: VERSION — увеличьте, если хотите, чтобы телефоны сразу забыли старую копию.
    ════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'sp-v6';   // увеличьте при следующей публикации — телефоны забудут старую копию панели
+const VERSION = 'sp-v7';   // увеличьте при следующей публикации — телефоны забудут старую копию панели
 /* Список файлов должен совпадать с адресами в index.html (включая ?v=…), иначе офлайн-копия не сработает */
-const SHELL = ['./', 'index.html', 'panel.css?v=6', 'panel.js?v=6', 'config.js?v=6', 'manifest.webmanifest', 'icons/icon-192.png'];
+const SHELL = ['./', 'index.html', 'panel.css?v=7', 'panel.js?v=7', 'config.js?v=7', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 /* 1. Пуш (Firebase) */
 try {
   importScripts('config.js');
   if (self.SP_CONFIG && self.SP_CONFIG.FIREBASE){
-    importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js', 'https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
+    importScripts('https://www.gstatic.com/firebasejs/13.2.0/firebase-app-compat.js', 'https://www.gstatic.com/firebasejs/13.2.0/firebase-messaging-compat.js');
     firebase.initializeApp(self.SP_CONFIG.FIREBASE);
     firebase.messaging();   // показ уведомлений и переход по нажатию Firebase делает сам
   }
