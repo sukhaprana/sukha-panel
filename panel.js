@@ -24,8 +24,8 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 /* ВЕРСИЯ СБОРКИ ПАНЕЛИ. Показывается на экране входа и в профиле; сервер сверяет её
    при каждом обновлении данных (bootstrap.build) и подсказывает, какая из сторон устарела.
    При публикации новой версии: увеличьте BUILD здесь, CORE_BUILD (общий с сервером) и ?v=… в index.html. */
-const BUILD = 6;
-const BUILD_NAME = 'v6 · 4 ноября 2026';
+const BUILD = 7;
+const BUILD_NAME = 'v7 · 8 ноября 2026';
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 1 · НАСТРОЙКИ (CONFIG)
@@ -35,13 +35,13 @@ const BUILD_NAME = 'v6 · 4 ноября 2026';
    ════════════════════════════════════════════════════════════════════════ */
 /* ---------- 1. CONFIG ---------- */
 const CONFIG = Object.assign({
-  MODE: 'demo',            // 'demo' — данные в браузере (прототип); 'gas' — Google Таблица через Apps Script
+  MODE: 'gas',            // 'demo' — данные в браузере (прототип); 'gas' — Google Таблица через Apps Script
   API_URL: '',             // URL веб-приложения Apps Script (…/exec), нужен для MODE:'gas'
   DEFAULT_DUE_TIME: '20:00',
   GEN_DAYS_AHEAD: 7,       // на сколько дней вперёд создавать регулярные задачи
   REOPEN_FALLBACK: 90,     // до какого % опускается прогресс, если готовую задачу вернули «в работу»
-  HTML2PDF_URL: 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js',
-  MAMMOTH_URL: 'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js', // чтение .docx в браузере
+  HTML2PDF_URL: 'vendor/html2pdf-0.14.0.bundle.min.js',
+  MAMMOTH_URL: 'vendor/mammoth-1.13.0.min.js', // чтение .docx в браузере
   IMG_MAX_SIDE: 1200,      // фото из Word уменьшаются до этого размера по длинной стороне
   GUIDE_MAX_STEPS: 12,
   /* Карточки студии на картах. Отзывы с них подтягивает сервер (Apps Script) по расписанию */
@@ -57,7 +57,7 @@ const CONFIG = Object.assign({
 /*@CORE-START — отсюда и до @CORE-END код общий для браузера и Google Apps Script */
 /* Версия данных/протокола: панель и сервер сверяют её, чтобы подсказать, что нужно обновить.
    panel.js BUILD == Code.gs CORE_BUILD в одной поставке. */
-const CORE_BUILD = 6;
+const CORE_BUILD = 7;
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 2 · УТИЛИТЫ
    Что делает:   даты, деньги, экранирование текста — мелкие помощники для всего кода.
@@ -73,6 +73,30 @@ const safeImg = s => { const str = String(s ?? '').trim(); return (/^data:image\
 const photoAttrs = value => /^private:[A-Za-z0-9_-]{10,160}$/.test(String(value||''))
   ? `src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-private-photo="${esc(value.slice(8))}"`
   : `src="${safeImg(value)}"`;
+/* Границы доверия общие для демо и Apps Script. Денежные значения храним с точностью до копейки. */
+const validDate = s => typeof s==='string' && /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(s) && ymd(parseYmd(s))===s;
+const amountValue = value => { const n=Number(value); return value!=='' && value!=null && Number.isFinite(n) && n>=0 && n<=1e9 ? Math.round(n*100)/100 : null; };
+const debtBalance = (rows, owner) => Math.round((rows||[]).filter(x=>!owner||x.owner===owner).reduce((v,x)=>v+(x.type==='loan'||x.type==='borrow'?1:-1)*Number(x.amount||0),0)*100)/100;
+const monthBounds = month => { const [y,m]=month.split('-').map(Number); return {from:month+'-01',to:ymd(new Date(y,m,0))}; };
+const shiftedMonth = (month,n) => {const [y,m]=month.split('-').map(Number);return ymd(new Date(y,m-1+n,1)).slice(0,7);};
+/* Файлы содержат только base64 без data:-префикса. Проверяем тип и сигнатуру, а не расширение само по себе. */
+function attachmentSpec(file){
+  const types={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',pdf:'application/pdf',txt:'text/plain',csv:'text/csv'};
+  if (!file || typeof file!=='object') return null;
+  const name=String(file.name||'').normalize('NFKC').replace(/[\\/<>:"|?*\x00-\x1f\x7f]/g,'_').slice(0,120);
+  const ext=name.split('.').pop().toLowerCase(), mime=types[ext], data=file.data;
+  if (!mime || typeof data!=='string' || !data.length || data.length>1398104 || data.length%4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return null;
+  const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';let bits=0,acc=0;const head=[];
+  for(const c of data.slice(0,32)){if(c==='=')break;acc=(acc<<6)|alphabet.indexOf(c);bits+=6;if(bits>=8){bits-=8;head.push((acc>>bits)&255);}}
+  const starts=(bytes)=>bytes.every((b,i)=>head[i]===b);
+  if (mime==='image/jpeg' && !starts([255,216,255])) return null;
+  if (mime==='image/png' && !starts([137,80,78,71,13,10,26,10])) return null;
+  if (mime==='image/webp' && !(starts([82,73,70,70]) && head.slice(8,12).join(',')==='87,69,66,80')) return null;
+  if (mime==='application/pdf' && !starts([37,80,68,70,45])) return null;
+  if (mime.startsWith('text/') && (head.some(b=>b===0) || starts([77,90]) || starts([80,75]))) return null;
+  const size=data.length/4*3-(data.endsWith('==')?2:data.endsWith('=')?1:0);
+  return size>0 && size<=1048576 ? {name,mime,data,size} : null;
+}
 const pad = n => String(n).padStart(2,'0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const parseYmd = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
@@ -87,7 +111,7 @@ const fmtDay = s => { const d = parseYmd(s); return `${d.getDate()} ${MONTHS_GEN
 const fmtDayShort = s => { const d = parseYmd(s); return `${pad(d.getDate())}.${pad(d.getMonth()+1)}`; };
 const fmtDT = iso => { if(!iso) return ''; const d = new Date(iso); return `${pad(d.getDate())}.${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const money = n => (Number(n)||0).toLocaleString('ru-RU') + ' ₽';
-const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const uid = p => p + (typeof Utilities!=='undefined' && Utilities.getUuid ? Utilities.getUuid() : typeof crypto!=='undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2));
 const hash = s => { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967295; };
 const weekStart = s => { const d = parseYmd(s); const k = (d.getDay()+6)%7; d.setDate(d.getDate()-k); return ymd(d); };
 /* ════════════════════════════════════════════════════════════════════════
@@ -601,7 +625,7 @@ function createServer(opts){
   let db = null;
   function load(){ db = opts.load(); if (!db){ db = opts.seed(); save(); } else if (db.v!==6) err('Неподдерживаемая версия базы. Требуется миграция; данные сохранены.', 'SCHEMA'); }
   const save = () => { if (opts.save(db)===false) err('Не удалось сохранить данные: хранилище заполнено.', 'STORAGE'); return true; };
-  const setPass = (u, plain) => opts.setPass ? opts.setPass(u, String(plain)) : (u.pass = String(plain));
+  const setPass = (u, plain) => { plain=String(plain); if (plain.length<12 || plain.length>128 || /^(.)\1+$/.test(plain) || /^(password|qwerty|123456|пароль)/i.test(plain)) err('Пароль: от 12 до 128 символов, без простых последовательностей.', 'VALIDATION'); return opts.setPass ? opts.setPass(u, plain) : (u.pass=plain); };
   const checkPass = (u, plain) => opts.checkPass ? opts.checkPass(u, String(plain||'')) : u.pass === plain;
   const event = (type, data) => { try { opts.onEvent && opts.onEvent(type, data, db); } catch(e){} };
   const err = (msg, code) => { const e = new Error(msg); e.code = code || 'FORBIDDEN'; throw e; };
@@ -627,11 +651,19 @@ function createServer(opts){
     p.progress = v===null ? (p.status==='done' ? 100 : 0) : v;
   }
   function ensureFinance(m){
-    if (db.finance[m]) return db.finance[m];
+    if (db.finance[m]) {
+      const f=db.finance[m];
+      if(!f.marketingMigrated){
+        f.marketing=f.marketing||[];const existing=amountValue(f.fixed?.marketing);
+        if(existing>0) f.marketing.unshift({id:'marketing-opening-'+m,name:'Маркетинг — ранее учтённая сумма',date:m+'-01',amount:existing,payer:'studio'});
+        f.fixed={...(f.fixed||{}),marketing:0};f.marketingMigrated=true;
+      }
+      return f;
+    }
     const prev = Object.keys(db.finance).filter(k => k < m).sort().pop();
-    const src = prev ? db.finance[prev] : null;
+    const src = prev ? ensureFinance(prev) : null;
     db.finance[m] = { income:{}, fixed: src ? { ...src.fixed } : Object.fromEntries(FIXED_EXPENSES.map(f => [f.k, f.def])), taxRate: src ? src.taxRate : 1,
-      trainers:{}, adminsManual:{}, purchases:[], utilities: src ? src.utilities.map(x => ({ ...x, id:uid('ut') })) : [], custom:[], ownerOps:[] };
+      trainers:{}, adminsManual:{}, purchases:[], utilities: src ? src.utilities.map(x => ({ ...x, id:uid('ut'), date:m+'-01' })) : [], custom:[], marketing:[], marketingMigrated:true, ownerOps:[] };
     return db.finance[m];
   }
 
@@ -654,10 +686,12 @@ function createServer(opts){
     if (changes.length){ t.history = [...(old.history||[]), { at:nowIso(), by:u.id, text:[...new Set(changes)].join(', ') }].slice(-25); }
     return t;
   }
-  function checkParent(task){
+  const parentFor=(id,u)=>db.tasks.find(x=>x.id===id&&Rules.canSeeTask(u,x))||null;
+  function checkParent(task,u,previousParentId){
     if (!task.parentId) return;
     if (task.parentId===task.id) err('Задачу нельзя связать саму с собой.','VALIDATION');
     const p = db.tasks.find(x => x.id===task.parentId); if (!p) err('Общая задача не найдена.','NOT_FOUND');
+    if(!Rules.canSeeTask(u,p)&&task.parentId!==previousParentId) err('Общая задача недоступна.', 'FORBIDDEN');
     if (p.parentId) err('Связывать можно только с общей задачей верхнего уровня.','VALIDATION');
     if (db.tasks.some(x => x.parentId===task.id)) err('У этой задачи уже есть свои связанные — она сама общая.','VALIDATION');
   }
@@ -738,7 +772,7 @@ function createServer(opts){
       if (rec.tries > 5){ delete db.resetCodes[u.id]; save(); err('Слишком много неверных попыток. Запросите новый код.','AUTH'); }
       const wrongCode = () => { save(); err('Неверный код. Осталось попыток: ' + Math.max(0, 5 - rec.tries) + '.','AUTH'); };
       if (String(opts.hashCode ? opts.hashCode(String(code)) : hash(String(code))) !== rec.hash) return wrongCode();
-      if (String(pass||'').length < 10) err('Пароль — минимум 10 символов.','VALIDATION');
+      if (String(pass||'').length < 12) err('Пароль — минимум 12 символов.','VALIDATION');
       setPass(u, pass);
       delete db.resetCodes[u.id];
       if (opts.dropAllFor) opts.dropAllFor(u.id, db);   // прежние сеансы закрываются
@@ -749,7 +783,7 @@ function createServer(opts){
        Ошибка кода VALIDATION (а не AUTH), чтобы неверный старый пароль не разлогинивал человека */
     changeMyPass({ oldPass, newPass }, u){
       if (!checkPass(u, String(oldPass||''))) err('Старый пароль неверен.','VALIDATION');
-      if (String(newPass||'').length < 10) err('Новый пароль — минимум 10 символов.','VALIDATION');
+      if (String(newPass||'').length < 12) err('Новый пароль — минимум 12 символов.','VALIDATION');
       if (String(newPass) === String(oldPass)) err('Новый пароль совпадает со старым.','VALIDATION');
       setPass(u, newPass);
       if (opts.dropAllFor){ opts.dropAllFor(u.id, db); const t = opts.issueToken(u, db); save(); return { ok:true, token:t }; }
@@ -759,7 +793,7 @@ function createServer(opts){
     saveContact({ contact }, u){
       if (!Rules.canEditContacts(u)) err('Контакты редактируют владельцы, управляющий и администраторы.');
       db.contacts = db.contacts || [];
-      const c = { cat:'vendor', type:'', phone:'', tg:'', email:'', note:'', ...contact };
+      const c={cat:contact?.cat||'vendor',id:contact?.id||'',name:contact?.name||'',type:contact?.type||'',phone:contact?.phone||'',tg:contact?.tg||'',email:contact?.email||'',note:contact?.note||'',updatedBy:u.id,updatedAt:nowIso()};
       if (!String(c.name||'').trim()) err('Укажите название или имя контакта.','VALIDATION');
       if (!['trainer','collab','vendor','other'].includes(c.cat)) err('Неизвестная категория контакта.','VALIDATION');
       /* Обрезаем и чистим поля — защита от раздувания хранилища */
@@ -840,19 +874,40 @@ function createServer(opts){
        (в рабочей версии — ещё и письмо на почту владельцев через Apps Script) */
     register({ fullName, role, phone, email, pass }){
       fullName = String(fullName||'').trim().replace(/\s+/g,' '); email = String(email||'').trim().toLowerCase();
+      if(fullName.length>160||email.length>254||String(phone||'').length>32) err('Слишком длинное ФИО, email или телефон.', 'VALIDATION');
+      if(db.users.length>=500||db.users.filter(x=>x.status==='pending').length>=100) err('Лимит заявок. Обратитесь к владельцу.', 'LIMIT');
       if (fullName.split(' ').length < 2) err('Укажите фамилию и имя полностью.','VALIDATION');
       if (!Object.prototype.hasOwnProperty.call(ROLES, role)) err('Выберите роль.','VALIDATION');
       if (normPhone(phone).length < 11) err('Укажите телефон полностью, например +7 900 123-45-67.','VALIDATION');
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) err('Проверьте адрес почты.','VALIDATION');
-      if (String(pass||'').length < 10) err('Пароль — минимум 10 символов.','VALIDATION');
+      if (String(pass||'').length < 12) err('Пароль — минимум 12 символов.','VALIDATION');
       if (db.users.some(x => (x.email && x.email.toLowerCase()===email) || (x.login && x.login.toLowerCase()===email))) err('Пользователь с такой почтой уже есть.','VALIDATION');
       if (db.users.some(x => normPhone(x.phone) && normPhone(x.phone)===normPhone(phone))) err('Пользователь с таким телефоном уже есть.','VALIDATION');
       const palette = ['#899C84','#CCC1FF','#EBCB8B','#9FC3BE','#E8B4C4','#B9C7A6','#D6CBB5'];
       const nu = { id:uid('u'), name:shortName(fullName), fullName, login:email, email, phone:String(phone).trim(), role, color:palette[db.users.length % palette.length],
-        active:false, status:'pending', createdAt:nowIso() };
+        active:false, status:'pending', emailVerificationRequired:!!opts.sendVerification, createdAt:nowIso() };
       setPass(nu, pass); db.users.push(nu); db.notifications.push({ id:uid('n'), type:'signup', userId:nu.id, at:nowIso(), read:false }); save();
       event('signup', { user:nu });
-      return { ok:true };
+      return { ok:true, emailVerificationRequired:!!nu.emailVerificationRequired };
+    },
+    requestEmailVerification({email}){
+      const q=String(email||'').trim().toLowerCase();
+      const user=db.users.find(x=>x.email?.toLowerCase()===q && x.status!=='rejected');
+      const silent={ok:true};if(!user || user.emailVerifiedAt || !opts.sendVerification) return silent;
+      db.emailCodes=db.emailCodes||{};const prev=db.emailCodes[user.id];
+      if(prev && prev.createdAt>Date.now()-60000) return silent;
+      const code=opts.resetCode ? opts.resetCode() : String(Math.floor(100000+Math.random()*900000));
+      const sent=opts.sendVerification(user,code);
+      if(sent){db.emailCodes[user.id]={hash:String(opts.hashCode?opts.hashCode(code):hash(code)),exp:Date.now()+900000,tries:0,createdAt:Date.now()};save();}
+      return silent;
+    },
+    confirmEmail({email,code}){
+      const user=db.users.find(x=>x.email?.toLowerCase()===String(email||'').trim().toLowerCase());
+      const rec=user&&(db.emailCodes||{})[user.id];
+      if(!rec||rec.exp<Date.now()||rec.tries>=5) err('Код неверен или истёк.', 'VALIDATION');
+      rec.tries++;save();
+      if(String(opts.hashCode?opts.hashCode(String(code)):hash(String(code)))!==rec.hash) err('Код неверен или истёк.', 'VALIDATION');
+      user.emailVerifiedAt=nowIso();delete db.emailCodes[user.id];save();return {ok:true};
     },
     bootstrap(_, u){
       generateRecurring();
@@ -865,6 +920,7 @@ function createServer(opts){
       }
       save();
       const levels = Rules.levelsFor(u); const owner = isOwner(u); const pay = Rules.canSeePayroll(u);
+      if(owner) {ensureFinance(todayStr().slice(0,7));save();}
       return {
         user: pubUser(u, true),
         users: db.users.filter(x => {
@@ -874,7 +930,7 @@ function createServer(opts){
         trainers: db.trainers,
         contacts: db.contacts || [],
         ...(Rules.canUseInventory(u) ? { inventory:(db.inventory||[]).map(({ photo, ...item }) => ({ ...item, hasPhoto:!!photo })) } : {}),
-        capabilities:['inventory-v1'],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
+        capabilities:['inventory-v1','finance-v2','task-files-v1'],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
         build: CORE_BUILD,            /* версия сервера: панель сверяет со своей и подсказывает, кому пора обновиться */
         tasks: db.tasks.filter(t => Rules.canSeeTask(u,t)),
         templates: db.templates.filter(t => levels.includes(t.level)),
@@ -882,17 +938,25 @@ function createServer(opts){
         reviews: db.reviews, guide: db.guide, settings: db.settings, schedule: db.schedule, reports: db.reports, notify: u.notify || defaultNotify(u.role),
         notifications: owner ? db.notifications : [],
         ...(pay ? { sales:db.sales, payroll:db.payroll, plans:db.plans, penalties:db.penalties } : {}),
-        ...(owner ? { finance:(ensureFinance(todayStr().slice(0,7)), db.finance), debt:db.debt, finConfig:db.finConfig, pay:db.pay||{} } : {}),
+        ...(owner ? { finance:(ensureFinance(todayStr().slice(0,7)), db.finance), debt:db.debt, personalDebt:db.personalDebt||[], finConfig:db.finConfig, pay:db.pay||{} } : {}),
         ...(pay ? { rates: ratesFor(u), ratePresets: db.ratePresets || [] } : {})
       };
     },
     saveTask({ task }, u){
+      if(!task || typeof task!=='object') err('Нет данных задачи.', 'VALIDATION');
+      const input=task;task={};['id','title','desc','level','block','assignee','helper','start','due','dueTime','priority','status','checklist','parentId','link','linkText'].forEach(k=>{if(k in input) task[k]=input[k];});
+      if('title' in task && (!String(task.title).trim()||String(task.title).length>200)) err('Название задачи — от 1 до 200 символов.', 'VALIDATION');
+      if(('due' in task && !validDate(task.due))||('start' in task && task.start && !validDate(task.start))||('dueTime' in task&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(task.dueTime))) err('Проверьте даты и время задачи.', 'VALIDATION');
+      if(task.status && !['todo','work','wait','done','cancel'].includes(task.status)) err('Неверный статус задачи.', 'VALIDATION');
+      if(task.priority && !Object.prototype.hasOwnProperty.call(PRIO,task.priority)) err('Неверный приоритет.', 'VALIDATION');
+      if('desc' in task) task.desc=String(task.desc||'').slice(0,2000);
+
       const old = task.id ? db.tasks.find(t => t.id===task.id) : null;
       if (!old){
         const selfSmm = task.level==='smm' && hasRole(u,'smm') && task.assignee===u.id && (!task.helper || task.helper===u.id);
         if (!Rules.levelsFor(u).includes(task.level) && !selfSmm) err(task.level==='smm' ? 'Задачи СММ ставят владелец и управляющий; СММ может поставить задачу только себе.' : 'Нет доступа к этому разделу задач.');
         const t = { id:uid('t'), block:'', desc:'', helper:'', comment:'', progress:0, status:'todo', priority:'mid', dueTime:CONFIG.DEFAULT_DUE_TIME, parentId:'',
-          ...task, id:uid('t'), createdBy:u.id, createdAt:nowIso(), doneBy:'', doneAt:'', late:false, recurringId:'', comments:[], history:[{ at:nowIso(), by:u.id, text:'создана' }] };
+          ...task, attachments:[], id:uid('t'), createdBy:u.id, createdAt:nowIso(), doneBy:'', doneAt:'', late:false, recurringId:'', comments:[], history:[{ at:nowIso(), by:u.id, text:'создана' }] };
         if (!t.title || !t.title.trim()) err('Укажите название задачи.','VALIDATION');
         /* Безопасность: ответственный/помощник — только активные сотрудники (демо и сервер проверяют одинаково) */
         ['assignee','helper'].forEach(k => { if (t[k]){ const a = db.users.find(x => x.id===t[k]); if (!a || !a.active || a.status!=='active') err('Ответственным можно назначить только активного сотрудника.','VALIDATION'); } });
@@ -900,27 +964,28 @@ function createServer(opts){
         t.title = String(t.title).trim().slice(0,200); t.desc = String(t.desc||'').slice(0,2000); t.block = String(t.block||'').slice(0,60);
         if (!t.start) t.start = t.due;
         t.moves = []; t.checklist = (isOwner(u) || isManager(u)) ? normChecklist(t.checklist, t.id) : [];
-        checkParent(t);
+        checkParent(t,u);
         if (t.status==='done'){ t.doneBy=u.id; t.doneAt=nowIso(); t.progress=100; }
-        db.tasks.push(t); recompute(t.parentId); save(); return { task:t, parent: t.parentId ? db.tasks.find(x => x.id===t.parentId) : null };
+        db.tasks.push(t); recompute(t.parentId); save(); return { task:t, parent: parentFor(t.parentId,u) };
       }
       if (!Rules.canSeeTask(u, old)) err('Нет доступа к этой задаче.');
       const full = Rules.canEditTask(u, old);
       const allowed = full ? null : ['status'];
       const patch = {};
-      Object.keys(task).forEach(k => { if (['id','createdBy','createdAt','history','doneBy','doneAt','late','comments','progress','recurringId','moves'].includes(k)) return;
+      Object.keys(task).forEach(k => { if (['id','createdBy','createdAt','history','doneBy','doneAt','late','comments','progress','recurringId','moves','attachments'].includes(k)) return;
         if (k==='checklist' && !(isOwner(u) || isManager(u))) return; if (task[k]===old[k]) return;
         if (allowed && !allowed.includes(k)) return; patch[k]=task[k]; });
       if ('level' in patch && !Rules.levelsFor(u).includes(patch.level)) err('Нет доступа к этому разделу задач.');
       const t = applyTaskUpdate(u, old, patch);
-      checkParent(t);
+      checkParent(t,u,old.parentId);
       db.tasks[db.tasks.indexOf(old)] = t;
       recompute(old.parentId); recompute(t.parentId); save();
-      return { task:t, parent: t.parentId ? db.tasks.find(x => x.id===t.parentId) : null, oldParent: old.parentId && old.parentId!==t.parentId ? db.tasks.find(x => x.id===old.parentId) : null };
+      return { task:t, parent: parentFor(t.parentId,u), oldParent: old.parentId!==t.parentId ? parentFor(old.parentId,u) : null };
     },
     deleteTask({ id }, u){
       const t = db.tasks.find(x => x.id===id); if (!t) err('Задача не найдена.','NOT_FOUND');
       if (!Rules.canDeleteTask(u,t)) err('Удалять задачи могут только управляющий и владелец.');
+      if(db.tasks.some(c=>c.parentId===id&&!Rules.canDeleteTask(u,c))) err('Нет доступа ко всем связанным задачам.', 'FORBIDDEN');
       db.tasks.forEach(c => { if (c.parentId===id) c.parentId=''; });
       db.tasks = db.tasks.filter(x => x.id!==id); recompute(t.parentId); save(); return { ok:true };
     },
@@ -936,6 +1001,11 @@ function createServer(opts){
       const parentId = target.parentId;
       const T = todayStr();
       let removed = 0;
+      const rootId=parentId||target.id;
+      const deleting=recurringId ? db.tasks.filter(x=>x.recurringId===recurringId&&x.status==='todo'&&x.due>=(deleteFutureOnly?target.due:T)) : (parentId||db.tasks.some(x=>x.parentId===target.id)) ? db.tasks.filter(x=>x.id===rootId||x.parentId===rootId) : [target];
+      if(deleting.some(x=>!Rules.canDeleteTask(u,x))) err('Нет доступа ко всем задачам этой цепочки.', 'FORBIDDEN');
+      const template=recurringId&&db.templates.find(x=>x.id===recurringId);
+      if(template&&!deleteFutureOnly&&(!Rules.canEditTemplates(u)||!Rules.levelsFor(u).includes(template.level))) err('Нет доступа к шаблону серии.', 'FORBIDDEN');
 
       if (recurringId) {
         if (deleteFutureOnly) {
@@ -1000,6 +1070,7 @@ function createServer(opts){
       const tp = db.templates.find(x => x.id===id); if (!tp) err('Не найдено.','NOT_FOUND');
       if (!Rules.canEditTemplates(u) || !Rules.levelsFor(u).includes(tp.level)) err('Нет прав.');
       const T = todayStr();
+      if(db.tasks.some(x=>x.recurringId===id&&x.due>=T&&x.status==='todo'&&!Rules.canDeleteTask(u,x))) err('Нет доступа ко всем задачам серии.', 'FORBIDDEN');
       db.templates = db.templates.filter(x => x.id!==id);
       db.tasks = db.tasks.filter(x => !(x.recurringId===id && x.due>=T && x.status==='todo'));
       save(); return { tasks: db.tasks.filter(x => Rules.canSeeTask(u,x)) };
@@ -1010,8 +1081,11 @@ function createServer(opts){
       if (!p.periodFrom || !p.periodTo) err('Выберите период: с какого по какое число.','VALIDATION');
       if (p.periodFrom > p.periodTo) err('Начало периода позже конца.','VALIDATION');
       if (p.periodFrom.slice(0,7) !== p.periodTo.slice(0,7)) err('Период выплаты — в пределах одного месяца.','VALIDATION');
-      p.period = periodLabel(p.periodFrom, p.periodTo);
-      const rec = { id:uid('p'), comment:'', issuedBy:'', issuedAt:'', ...p, amount:Number(p.amount), createdBy:u.id, createdAt:nowIso() };
+      if (!validDate(p.periodFrom) || !validDate(p.periodTo) || (p.plannedDate && !validDate(p.plannedDate))) err('Проверьте даты выплаты.', 'VALIDATION');
+      if (amountValue(p.amount)===null) err('Некорректная сумма.', 'VALIDATION');
+      const recipient=db.users.find(x=>x.id===p.recipient&&x.active&&x.status==='active') || db.trainers.find(x=>x.id===p.recipient&&x.active);
+      if (!recipient) err('Получатель не найден.', 'VALIDATION');
+      const rec = { id:uid('p'), recipient:p.recipient, periodFrom:p.periodFrom, periodTo:p.periodTo, period:periodLabel(p.periodFrom,p.periodTo), plannedDate:p.plannedDate||todayStr(), comment:String(p.comment||'').slice(0,500), amount:amountValue(p.amount), issuedBy:'', issuedAt:'', createdBy:u.id, createdAt:nowIso() };
       db.payouts.push(rec); save(); return rec;
     },
     issuePayout({ id }, u){
@@ -1027,7 +1101,10 @@ function createServer(opts){
     },
     saveReview({ r }, u){
       if (!r.client || !r.text) err('Заполните имя клиента и текст отзыва.','VALIDATION');
-      const rec = { id:uid('v'), confirmed:false, confirmedBy:'', origin:'manual', ...r, rating:Number(r.rating)||5, createdBy:u.id };
+      const rating=Number(r.rating)||5;
+      if(!validDate(r.date)||rating<1||rating>5) err('Проверьте дату и оценку отзыва.','VALIDATION');
+      /* Подтверждение и источник отзыва определяет сервер. */
+      const rec = { id:uid('v'), confirmed:false, confirmedBy:'', origin:'manual', client:String(r.client).trim().slice(0,200), text:String(r.text).trim().slice(0,10000), source:String(r.source||'').slice(0,200), date:r.date, rating, createdBy:u.id };
       db.reviews.push(rec); save(); return rec;
     },
     confirmReview({ id, value }, u){
@@ -1038,8 +1115,19 @@ function createServer(opts){
     saveGuide({ item }, u){
       if (!Rules.canEditGuide(u)) err('Редактировать гайд могут управляющий и владелец.');
       const i = db.guide.findIndex(x => x.id===item.id);
-      let g = { ...item, id: item.id || uid('g'), draft:false, updatedBy:u.id, updatedAt:nowIso() };
-      if (!g.title || !g.title.trim()) err('Укажите название инструкции.','VALIDATION');
+      if(!item||!Array.isArray(item.steps)||item.steps.length>12||!String(item.title||'').trim()) err('Проверьте название и шаги инструкции (до 12).', 'VALIDATION');
+      const known=new Set(db.guide.flatMap(g=>(g.steps||[]).map(st=>st&&typeof st==='object'?st.img:'')));
+      const steps=item.steps.map(step=>{
+        const st=typeof step==='string'?{t:step,img:''}:step;
+        if(!st||typeof st!=='object') err('Неверный шаг инструкции.', 'VALIDATION');
+        const img=String(st.img||'');
+        if(img&&!known.has(img)){
+          const match=img.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+          if(!match||!attachmentSpec({name:'photo.'+match[1].split('/')[1],data:match[2]})) err('Новое фото должно быть JPEG, PNG или WebP до 1 МБ. Чужие ссылки на Диск не принимаются.', 'VALIDATION');
+        }
+        return {t:String(st.t||'').slice(0,4000),img};
+      });
+      let g={id:i>=0?db.guide[i].id:uid('g'),title:String(item.title).trim().slice(0,200),steps,sourceFile:String(item.sourceFile||'').slice(0,120),draft:false,updatedBy:u.id,updatedAt:nowIso()};
       if (opts.onGuide) g = opts.onGuide(g) || g;
       if (i>=0) db.guide[i]=g; else db.guide.push(g);
       save();
@@ -1062,7 +1150,7 @@ function createServer(opts){
       if (user.extraRoles && !Array.isArray(user.extraRoles)) err('Неверный список ролей.', 'VALIDATION');
       if (user.extraRoles) user.extraRoles = [...new Set(user.extraRoles.filter(r => ROLES[r]))].slice(0,4);
       const { pass:newPass, ...rest } = user;
-      if (newPass && (String(newPass).length < 10 || String(newPass).length>1024)) err('Пароль — минимум 10 символов.','VALIDATION');
+      if (newPass && (String(newPass).length < 12 || String(newPass).length>1024)) err('Пароль — минимум 12 символов.','VALIDATION');
       /* Безопасность: берём только разрешённые поля — служебные (salt, passHash, notify и т.п.) через сохранение сотрудника не меняются.
          Статус заявки меняется только через approveUser/rejectUser, где чистятся уведомления. */
       const ALLOWED_USER_FIELDS = ['fullName','phone','email','login','role','extraRoles','active','color','avatar'];
@@ -1090,6 +1178,7 @@ function createServer(opts){
     approveUser({ id, role }, u){
       if (!Rules.canManageTeam(u)) err('Подтверждать заявки может только владелец.');
       const x = db.users.find(y => y.id===id); if (!x) err('Заявка не найдена.','NOT_FOUND');
+      if(x.emailVerificationRequired&&!x.emailVerifiedAt) err('Сотруднику нужно подтвердить email перед одобрением.', 'VALIDATION');
       x.status='active'; x.active=true; if (role && ROLES[role]) x.role = role; x.approvedBy=u.id; x.approvedAt=nowIso();
       db.notifications.forEach(n => { if (n.userId===id) n.read = true; }); save();
       return { user:pubUser(x, true), notifications:db.notifications };
@@ -1105,7 +1194,8 @@ function createServer(opts){
       if (!t.fullName || !t.fullName.trim()) err('Укажите ФИО тренера.','VALIDATION');
       /* сохраняем связь с сотрудником (совмещение «тренер»), если она есть */
       const prev = db.trainers.find(x => x.id===t.id);
-      const rec = upsert(db.trainers, { active:true, phone:'', note:'', ...(prev?.userId ? { userId: prev.userId } : {}), ...t, id: t.id || uid('tr'), name:t.fullName.trim(), fullName:t.fullName.trim() });
+      if(t.id&&!prev) err('Тренер не найден.','NOT_FOUND');
+      const rec = upsert(db.trainers, { ...(prev?.userId ? { userId: prev.userId } : {}), active:t.active!==false, phone:String(t.phone||'').slice(0,32), note:String(t.note||'').slice(0,2000), id:prev?.id || uid('tr'), name:t.fullName.trim().slice(0,200), fullName:t.fullName.trim().slice(0,200) });
       save(); return rec;
     },
     /* График: заменить все смены на дату (редактируют управляющий и владельцы) */
@@ -1195,7 +1285,7 @@ function createServer(opts){
       else if (after<items.length && t.status==='done'){ t.status='work'; t.doneBy=''; t.doneAt=''; t.late=false; }
       else if (after>0 && t.status==='todo') t.status='work';
       if (old.status!==t.status) t.history = [...(t.history||[]), { at:nowIso(), by:u.id, text:`статус: ${STATUS[old.status]} → ${STATUS[t.status]}` }].slice(-25);
-      save(); return { task:t, parent: t.parentId ? db.tasks.find(x => x.id===t.parentId) : null };
+      save(); return { task:t, parent: parentFor(t.parentId,u) };
     },
     saveRate({ kind, id, rate }, u){
       if (!isOwner(u)){
@@ -1298,10 +1388,12 @@ function createServer(opts){
     addUser({ user }, u){
       if (!Rules.canManageTeam(u)) err('Добавлять сотрудников может только владелец.');
       const fullName = String(user.fullName||'').trim().replace(/\s+/g,' '); const email = String(user.email||'').trim().toLowerCase(); const login = String(user.login||email||'').trim().toLowerCase();
+      if(fullName.length>160||email.length>254||String(user.phone||'').length>32) err('Слишком длинное ФИО, email или телефон.', 'VALIDATION');
+      if(db.users.length>=500||db.users.filter(x=>x.status==='pending').length>=100) err('Лимит заявок. Обратитесь к владельцу.', 'LIMIT');
       if (fullName.split(' ').length < 2) err('Укажите фамилию и имя.','VALIDATION');
       if (!ROLES[user.role]) err('Выберите роль.','VALIDATION');
-      if (!login) err('Укажите почту или логин для входа.','VALIDATION');
-      if (String(user.pass||'').length < 10) err('Временный пароль — минимум 10 символов.','VALIDATION');
+      if (!login || login.length>200) err('Укажите почту или логин для входа.','VALIDATION');
+      if (String(user.pass||'').length < 12) err('Временный пароль — минимум 12 символов.','VALIDATION');
       if (db.users.some(x => (x.login && x.login.toLowerCase()===login) || (email && x.email && x.email.toLowerCase()===email))) err('Такой логин или почта уже есть.','VALIDATION');
       if (user.phone && db.users.some(x => normPhone(x.phone) && normPhone(x.phone)===normPhone(user.phone))) err('Такой телефон уже есть.','VALIDATION');
       const palette = ['#899C84','#CCC1FF','#EBCB8B','#9FC3BE','#E8B4C4','#B9C7A6','#D6CBB5'];
@@ -1348,8 +1440,9 @@ function createServer(opts){
       payrollOnly(u);
       if (!s.date || !PRODUCT[s.product]) err('Укажите дату и что продано.','VALIDATION');
       if (!(Number(s.price) > 0)) err('Укажите сумму продажи больше нуля.','VALIDATION');
-      const rec = upsert(db.sales, { client:'', discount:0, clientType:'current', crmTouch:false, sellerId:'', note:'', ...s, price:Number(s.price), discount:Number(s.discount)||0,
-        id: s.id || uid('s'), createdBy: s.createdBy || u.id, createdAt: s.createdAt || nowIso() });
+      if(!validDate(s.date)||amountValue(s.price)===null||Number(s.price)<=0||amountValue(s.discount||0)===null||Number(s.discount||0)>100) err('Проверьте дату, сумму и скидку.', 'VALIDATION');
+      const old=db.sales.find(x=>x.id===s.id);
+      const rec=upsert(db.sales,{id:old?.id||uid('s'),date:s.date,product:s.product,price:amountValue(s.price),discount:amountValue(s.discount||0),client:String(s.client||'').slice(0,300),clientType:['new','return','current'].includes(s.clientType)?s.clientType:'current',crmTouch:!!s.crmTouch,sellerId:db.users.some(x=>x.id===s.sellerId)?s.sellerId:'',note:String(s.note||'').slice(0,500),createdBy:old?.createdBy||u.id,createdAt:old?.createdAt||nowIso(),updatedBy:u.id,updatedAt:nowIso()});
       save(); return rec;
     },
     deleteSale({ id }, u){ payrollOnly(u); db.sales = db.sales.filter(x => x.id!==id); save(); return { ok:true }; },
@@ -1364,7 +1457,8 @@ function createServer(opts){
       let importedCount = 0, totalAmount = 0, skipped = 0;
       const seen = new Set(db.sales.map(s => `${s.date}|${s.client}|${s.price}|${s.note||''}`));
       orders.forEach(ord => {
-        const cleanClient = sanitize(ord.client);
+        /* Значение в ключе дубля совпадает с тем, что попадёт в продажу, даже при пустом имени. */
+        const cleanClient = sanitize(ord.client) || 'Клиент (импорт)';
         const cleanComment = sanitize(ord.comment);
         const price = Number(ord.netAmount);
         /* Частичный возврат (вернули меньше, чем сумма продажи) — импортируем за вычетом возврата;
@@ -1380,7 +1474,7 @@ function createServer(opts){
         const newSale = {
           id: uid('s'),
           date,
-          client: cleanClient || 'Клиент (импорт)',
+          client: cleanClient,
           product,
           price,
           discount: Math.max(0, Number(ord.discount) || 0),
@@ -1401,36 +1495,133 @@ function createServer(opts){
     savePayroll({ month, adminId, data }, u){
       payrollOnly(u);
       if ('manual' in data && !isOwner(u)) err('Сумму вручную задаёт владелец.');
+      if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||'')||!db.users.some(x=>x.id===adminId)) err('Проверьте месяц и сотрудника.','VALIDATION');
+      /* Не сохраняем тело запроса целиком: только поля расчёта зарплаты. */
+      const patch={};
+      ['bonus','advance','manual','shiftAdjust'].forEach(k=>{if(!(k in data)) return; const n=Number(data[k]);if(data[k]!==''&&(!Number.isFinite(n)||Math.abs(n)>1e9||(k!=='shiftAdjust'&&n<0))) err('Некорректная сумма зарплаты.','VALIDATION');patch[k]=data[k]===''?'':n;});
+      if('note' in data) patch.note=String(data.note||'').slice(0,2000);
+      if('kpi' in data){patch.kpi={};Object.entries(data.kpi||{}).forEach(([k,v])=>{if(!KPIS.some(x=>x.k===k)) err('Неизвестный показатель.','VALIDATION');const n=amountValue(v);if(v!==''&&n===null) err('Некорректный показатель.','VALIDATION');patch.kpi[k]=v===''?'':n;});}
       db.payroll[month] = db.payroll[month] || {};
       const cur = db.payroll[month][adminId] || { shifts:{}, kpi:{}, bonus:0, note:'' };
-      db.payroll[month][adminId] = { ...cur, ...data, shifts:{ ...cur.shifts, ...(data.shifts||{}) }, kpi:{ ...cur.kpi, ...(data.kpi||{}) } };
+      db.payroll[month][adminId] = { ...cur, ...patch, kpi:{ ...cur.kpi, ...(patch.kpi||{}) } };
       save(); return db.payroll[month][adminId];
     },
-    savePlan({ month, amount }, u){ payrollOnly(u); db.plans[month] = Number(amount)||0; save(); return db.plans; },
+    savePlan({ month, amount }, u){ payrollOnly(u);const n=amountValue(amount);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||'')||n===null) err('Проверьте месяц и сумму плана.','VALIDATION'); db.plans[month] = n; save(); return db.plans; },
     savePenalty({ p }, u){
       payrollOnly(u);
       if (!PEN[p.code] || !p.adminId || !p.date) err('Выберите администратора, дату и нарушение.','VALIDATION');
-      const rec = upsert(db.penalties, { extra:0, note:'', ...p, id: p.id || uid('pn'), createdBy: p.createdBy || u.id });
+      const prev=db.penalties.find(x=>x.id===p.id), extra=amountValue(p.extra??0);
+      if(!validDate(p.date)||extra===null||!db.users.some(x=>x.id===p.adminId)) err('Проверьте сотрудника, дату и сумму.','VALIDATION');
+      if(p.id&&!prev) err('Нарушение не найдено.','NOT_FOUND');
+      const rec = upsert(db.penalties, { code:p.code,adminId:p.adminId,date:p.date,extra,note:String(p.note||'').slice(0,2000),id:prev?.id||uid('pn'),createdBy:prev?.createdBy||u.id });
       save(); return rec;
     },
     deletePenalty({ id }, u){ payrollOnly(u); db.penalties = db.penalties.filter(x => x.id!==id); save(); return { ok:true }; },
     /* --- Финансы (только владельцы) --- */
     getFinance({ month }, u){ ownerOnly(u); ensureFinance(month); save(); return db.finance; },
-    saveFinance({ month, data }, u){
+    saveFinance({ month, data }, u, token, internalArrayWrite){
       ownerOnly(u); const f = ensureFinance(month);
-      db.finance[month] = { ...f, ...data, income:{ ...f.income, ...(data.income||{}) }, fixed:{ ...f.fixed, ...(data.fixed||{}) },
-        trainers:{ ...f.trainers, ...(data.trainers||{}) }, adminsManual:{ ...f.adminsManual, ...(data.adminsManual||{}) }, trainerClasses:{ ...(f.trainerClasses||{}), ...(data.trainerClasses||{}) } };
-      save(); return db.finance;
+      const src=data && typeof data==='object' && !Array.isArray(data) ? data : {};
+      if(!internalArrayWrite && ['purchases','utilities','marketing','custom','ownerOps'].some(k=>k in src)) err('Обновите панель: расходы сохраняются по одной операции.', 'CLIENT_UPGRADE');
+      const allowed=['income','fixed','trainers','adminsManual','trainerClasses','taxRate','purchases','utilities','marketing','custom','ownerOps'];
+      if (Object.keys(src).some(k=>!allowed.includes(k))) err('Неизвестное поле финансов.', 'VALIDATION');
+      const patch={};
+      ['income','fixed','trainers','adminsManual','trainerClasses'].forEach(k=>{
+        if (!(k in src)) return;
+        if (!src[k] || Array.isArray(src[k]) || typeof src[k]!=='object') err('Некорректные суммы.', 'VALIDATION');
+        const clean={};Object.entries(src[k]).forEach(([key,value])=>{if(!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) err('Неверный ключ.', 'VALIDATION'); if (value==='' || value===null) clean[key]=value; else {const n=amountValue(value);if(n===null) err('Некорректная сумма.', 'VALIDATION');clean[key]=n;}});
+        patch[k]={...(f[k]||{}),...clean};
+      });
+      if ('taxRate' in src) {const n=amountValue(src.taxRate);if(n===null||n>30) err('Ставка налога от 0 до 30%.', 'VALIDATION');patch.taxRate=n;}
+      ['purchases','utilities','marketing','custom','ownerOps'].forEach(k=>{
+        if (!(k in src)) return;
+        if (!Array.isArray(src[k]) || src[k].length>1000) err('Слишком большой список расходов.', 'VALIDATION');
+        patch[k]=src[k].map(item=>{
+          const amount=amountValue(item.amount);
+          if (amount===null || amount<=0 || (item.date && (!validDate(item.date)||item.date.slice(0,7)!==month))) err('Проверьте сумму и дату расхода.', 'VALIDATION');
+          const old=(f[k]||[]).find(x=>x.id===item.id); const rec={id:old?.id || (item.id && /^[A-Za-z0-9_-]{1,100}$/.test(item.id)?item.id:uid('f')),amount,date:item.date||month+'-01',createdBy:old?.createdBy||u.id,createdAt:old?.createdAt||nowIso(),updatedBy:item._changed?u.id:old?.updatedBy||u.id,updatedAt:item._changed?nowIso():old?.updatedAt||nowIso(),requestId:String(item.requestId||old?.requestId||'').slice(0,100)};
+          if(k==='ownerOps') {if(!db.users.some(x=>x.id===item.owner&&isOwner(x))||!['in','div'].includes(item.type)) err('Неверная операция собственника.', 'VALIDATION');return {...rec,owner:item.owner,type:item.type};}
+          if(!String(item.name||'').trim()) err('Укажите название расхода.', 'VALIDATION');
+          if(item.payer && item.payer!=='studio' && !db.users.some(x=>x.id===item.payer&&isOwner(x))) err('Неизвестный плательщик.', 'VALIDATION');
+          return {...rec,name:String(item.name).trim().slice(0,160),payer:item.payer||'studio'};
+        });
+      });
+      db.finance[month]={...f,...patch};save();return db.finance;
+
+    },
+    /* Атомарные операции строк: параллельное добавление коллеги не перезаписывает весь список. */
+    saveFinanceItem({month,kind,item,requestId,expectedUpdatedAt},u){
+      ownerOnly(u);if(!['purchases','utilities','marketing','custom','ownerOps'].includes(kind)||!item) err('Неизвестный список расходов.', 'VALIDATION');
+      const f=ensureFinance(month),rows=f[kind]||[];
+      if(requestId&&rows.some(x=>x.requestId===requestId&&x.createdBy===u.id)) return db.finance;
+      const old=item.id?rows.find(x=>x.id===item.id):null;
+      if(item.id&&!old) err('Операция удалена. Обновите страницу.', 'NOT_FOUND');
+      if(old&&String(old.updatedAt||'')!==String(expectedUpdatedAt||'')) err('Расход уже изменён коллегой. Обновите страницу.', 'CONFLICT');
+      const id=old?.id||uid('f'),next={...item,id,_changed:true,requestId:String(requestId||old?.requestId||'').slice(0,100)};
+      const items=old?rows.map(x=>x.id===id?next:x):[...rows,next];
+      handlers.saveFinance({month,data:{[kind]:items}},u,null,true);
+      return db.finance;
+    },
+    deleteFinanceItem({month,kind,id,expectedUpdatedAt},u){
+      ownerOnly(u);if(!['purchases','utilities','marketing','custom','ownerOps'].includes(kind)) err('Неизвестный список расходов.', 'VALIDATION');
+      const f=ensureFinance(month),rows=f[kind]||[],old=rows.find(x=>x.id===id);
+      if(!old)return db.finance;
+      if(String(old.updatedAt||'')!==String(expectedUpdatedAt||'')) err('Расход уже изменён коллегой. Обновите страницу.', 'CONFLICT');
+      f[kind]=rows.filter(x=>x.id!==id);save();return db.finance;
     },
     saveDebt({ d }, u){
-      ownerOnly(u); if (!(Number(d.amount)>0) || !d.date) err('Укажите дату и сумму.','VALIDATION');
-      upsert(db.debt, { note:'', ...d, amount:Number(d.amount), id: d.id || uid('d') }); save(); return db.debt;
+      ownerOnly(u);
+      const amount=amountValue(d?.amount);
+      if(!d || amount===null || amount<=0 || !validDate(d.date) || !['loan','repay'].includes(d.type) || !db.users.some(x=>x.id===d.owner&&isOwner(x))) err('Проверьте владельца, дату, сумму и операцию.', 'VALIDATION');
+      const old=(db.debt||[]).find(x=>x.id===d.id);
+      const rec={id:old?.id||uid('d'),owner:d.owner,date:d.date,type:d.type,amount,note:String(d.note||'').slice(0,500),createdBy:old?.createdBy||u.id,createdAt:old?.createdAt||nowIso(),updatedBy:u.id,updatedAt:nowIso()};
+      db.debt=db.debt||[];upsert(db.debt,rec);save();return db.debt;
     },
-    deleteDebt({ id }, u){ ownerOnly(u); db.debt = db.debt.filter(x => x.id!==id); save(); return db.debt; }
+    deleteDebt({ id }, u){ownerOnly(u);db.debt=(db.debt||[]).filter(x=>x.id!==id);save();return db.debt;},
+    savePersonalDebt({ entry, requestId }, u){
+      ownerOnly(u);
+      if (!entry || !['borrow','repay'].includes(entry.type) || !validDate(entry.date) || amountValue(entry.amount)===null || amountValue(entry.amount)<=0) err('Укажите дату, сумму и операцию личного долга.', 'VALIDATION');
+      const debtor=db.users.find(x=>x.id===entry.debtor&&isOwner(x)),creditor=db.users.find(x=>x.id===entry.creditor&&isOwner(x));
+      if(!debtor||!creditor||debtor.id===creditor.id) err('Выберите двух разных собственников.', 'VALIDATION');
+      db.personalDebt=db.personalDebt||[];
+      if(requestId && db.personalDebt.some(x=>x.requestId===requestId&&x.createdBy===u.id)) return db.personalDebt;
+      const old=db.personalDebt.find(x=>x.id===entry.id);
+      const rec={id:old?.id||uid('pd'),type:entry.type,date:entry.date,amount:amountValue(entry.amount),debtor:debtor.id,creditor:creditor.id,note:String(entry.note||'').slice(0,500),createdBy:old?.createdBy||u.id,createdAt:old?.createdAt||nowIso(),updatedBy:u.id,updatedAt:nowIso(),requestId:String(requestId||'').slice(0,100)};
+      upsert(db.personalDebt,rec);save();return db.personalDebt;
+    },
+    deletePersonalDebt({id},u){ownerOnly(u);db.personalDebt=(db.personalDebt||[]).filter(x=>x.id!==id);save();return db.personalDebt;},
+    addTaskAttachment({taskId,file,requestId},u){
+      const task=db.tasks.find(t=>t.id===taskId);
+      if(!task||!Rules.canSeeTask(u,task)) err('Задача недоступна.', 'NOT_FOUND');
+      if(!Rules.canEditTask(u,task)&&!isParticipant(u,task)) err('Нет прав добавлять файлы.');
+      db.taskFiles=db.taskFiles||{};task.attachments=task.attachments||[];
+      const previous=task.attachments.find(a=>a.requestId===requestId&&a.by===u.id);
+      if(requestId&&previous) return {task};
+      if(task.attachments.length>=8) err('Не больше 8 файлов в задаче.', 'VALIDATION');
+      const spec=attachmentSpec(file);if(!spec) err('Разрешены JPEG, PNG, WebP, PDF, TXT и CSV до 1 МБ. Проверьте содержимое файла.', 'VALIDATION');
+      if(task.attachments.reduce((n,a)=>n+a.size,0)+spec.size>4194304) err('Общий размер файлов задачи — до 4 МБ.', 'VALIDATION');
+      const id=uid('af'),storage=opts.storeAttachment ? opts.storeAttachment(spec,id) : {data:spec.data};
+      const rec={id,taskId,name:spec.name,mime:spec.mime,size:spec.size,by:u.id,at:nowIso(),requestId:String(requestId||'').slice(0,100)};
+      db.taskFiles[id]={...rec,...storage};task.attachments.push(rec);save();return {task};
+    },
+    getTaskAttachment({taskId,id},u){
+      const task=db.tasks.find(t=>t.id===taskId),file=(db.taskFiles||{})[id];
+      if(!task || !Rules.canSeeTask(u,task) || !file || file.taskId!==taskId || !(task.attachments||[]).some(a=>a.id===id)) err('Файл недоступен.', 'NOT_FOUND');
+      return {name:file.name,mime:file.mime,size:file.size,data:opts.readAttachment ? opts.readAttachment(file) : file.data};
+    },
+    deleteTaskAttachment({taskId,id},u){
+      const task=db.tasks.find(t=>t.id===taskId),file=(db.taskFiles||{})[id];
+      if(!task||!Rules.canSeeTask(u,task)||!file||file.taskId!==taskId) err('Файл недоступен.', 'NOT_FOUND');
+      if(!Rules.canDeleteTask(u,task)&&file.by!==u.id) err('Удалять файл может автор или руководитель.');
+      task.attachments=(task.attachments||[]).filter(x=>x.id!==id);delete db.taskFiles[id];save();
+      if(opts.removeAttachment) {try{opts.removeAttachment(file);}catch(e){/* Файл уже недоступен из API; очистку Диска можно повторить отдельно. */}}
+      return {task};
+    }
+
   };
 
   if (opts.extra) Object.assign(handlers, opts.extra({ get db(){ return db; }, save, err, pubUser, upsert, setPass, checkPass, syncReviewsCore, generateRecurring }));
-  const PUBLIC = ['login','register','requestReset','confirmReset', ...(opts.publicActions||[])];
+  const PUBLIC = ['login','register','requestReset','confirmReset','requestEmailVerification','confirmEmail', ...(opts.publicActions||[])];
   function callSync(action, payload, token){
     if (!db || opts.reload) load();
     const validate = (v, depth=0) => {
@@ -1478,8 +1669,7 @@ const safeLS = {
   set(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
   del(k){ try { localStorage.removeItem(k); } catch(e){} }
 };
-/* Где хранить вход: в рабочей версии — до выхода (приложение на телефоне не просит пароль каждый раз),
-   в демо — до закрытия вкладки */
+/* Хранилище демовхода — до закрытия вкладки. Рабочий токен теперь только в памяти (см. tokenStore). */
 const safeSS = {
   get(k){ try { return sessionStorage.getItem(k); } catch(e){ return null; } },
   set(k,v){ try { sessionStorage.setItem(k,v); } catch(e){} },
@@ -1498,7 +1688,10 @@ const DemoServer = createServer({
   delay: 60
 });
 
-const tokenStore = CONFIG.MODE==='gas' ? safeLS : safeSS;
+/* Рабочий токен только в памяти: перезагрузка требует входа. Не оставляем старые ключи. */
+if (CONFIG.MODE==='gas') {safeLS.del('sp_token');safeSS.del('sp_token');}
+let sessionToken='';
+const tokenStore = CONFIG.MODE==='gas' ? {get:()=>sessionToken,set:(_,v)=>{sessionToken=v;},del:()=>{sessionToken='';}} : safeSS;
 
 /* --- Api: единая точка входа. Для Google Apps Script меняется только CONFIG --- */
 const Api = {
@@ -1507,7 +1700,7 @@ const Api = {
     try {
       if (CONFIG.MODE === 'demo') return await DemoServer.call(action, payload, this.token);
       if (!CONFIG.API_URL) throw Object.assign(new Error('Не указан адрес сервера (CONFIG.API_URL).'), { code:'CONFIG' });
-      const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 20000);
+      const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 60000);
       // text/plain — чтобы браузер не делал предварительный CORS-запрос, Apps Script его не поддерживает
       let res;
       try { res = await fetch(CONFIG.API_URL, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
@@ -1518,7 +1711,7 @@ const Api = {
       if (!data.ok) throw Object.assign(new Error(data.error || 'Ошибка сервера.'), { code:data.code || 'SERVER' });
       return data.result;
     } catch(e){
-      if (e.name==='AbortError') e.message = 'Сервер не ответил за 20 секунд. Проверьте интернет и повторите.';
+      if (e.name==='AbortError') e.message = 'Сервер не ответил за 60 секунд. Проверьте интернет и повторите.';
       else if (e instanceof TypeError) e.message = 'Нет связи с сервером. Проверьте интернет и повторите.';
       if (e.code==='AUTH' && action!=='login' && action!=='register' && action!=='requestReset' && action!=='confirmReset'){ Auth.logout(true); }
       throw e;
@@ -1534,7 +1727,7 @@ const Api = {
    ════════════════════════════════════════════════════════════════════════ */
 /* ---------- 5. АВТОРИЗАЦИЯ ---------- */
 const S = { user:null, data:null, view:'day', date:todayStr(), person:'all', level:'all', block:'all', overdueOnly:false, calMonth:todayStr().slice(0,7),
-  payMonth:todayStr().slice(0,7), salMonth:todayStr().slice(0,7), finMonth:todayStr().slice(0,7), salAdmin:'', revFilter:'all', guideDraft:null, guideQuery:'',
+  payMonth:todayStr().slice(0,7), payoutPeriodMonth:todayStr().slice(0,7), salMonth:todayStr().slice(0,7), finMonth:todayStr().slice(0,7), salAdmin:'', revFilter:'all', guideDraft:null, guideQuery:'',
   expanded:{ ongoing:false }, modal:null, busy:false, lastBadges:new Map(), loginPick:'', authMode:'login',
   navOpen:'', /* какая группа верхней навигации раскрыта (группировка вкладок) */ salPresetKind:'staff', copyMonthFrom:'',
   inventoryQuery:'', inventoryKind:'all', contactQuery:'', /* поиск в «Важных контактах» */
@@ -1654,7 +1847,7 @@ function getTabsList(){
     ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'], ['contacts','Контакты'],
     ...(Rules.canUseInventory(S.user) ? [['inventory','Расходники и товары']] : []),
     ...(Rules.canSeePayroll(S.user) ? [['sal','Продажи и зарплата']] : []),
-    ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
+    ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы'],['marketing','Маркетинг и реклама'],['utilities','Коммуналка и сервисы']] : []),
     ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
   ];
 }
@@ -1667,7 +1860,7 @@ function getTabsList(){
 const NAV_GROUPS = [
   { k:'work',  label:'Работа',     tabs:['day','sched','rep','cal'] },
   { k:'pulse', label:'Показатели', tabs:['stats','rev'] },
-  { k:'money', label:'Деньги',     tabs:['pay','sal','fin'] },
+  { k:'money', label:'Деньги',     tabs:['pay','sal','fin','marketing','utilities'] },
   { k:'know',  label:'База',       tabs:['guide','contacts','inventory'] },   /* знания студии + важные контакты */
   { k:'team',  label:'Команда',    tabs:['team'] }
 ];
@@ -1780,7 +1973,7 @@ function switchTab(targetView){
 
     updateBannersState();
 
-    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
+    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') };
     if (views[S.view]) {
       mainEl.innerHTML = views[S.view]();
     }
@@ -1807,7 +2000,7 @@ function buildAppHtml(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
-  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin };
+  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') };
   const unread = unreadCount();
   return `
     <header class="top">
@@ -1890,11 +2083,12 @@ function viewLogin(){
       <div class="field"><label for="fg2-login">Логин, почта или телефон</label><input class="input" id="fg2-login" autocomplete="username" required value="${esc(S.resetLogin)}"></div>
       <div class="grid2">
         <div class="field"><label for="fg2-code">Код из сообщения</label><input class="input" id="fg2-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required placeholder="6 цифр" autocomplete="one-time-code"></div>
-        <div class="field"><label for="fg2-p1">Новый пароль</label><input class="input" id="fg2-p1" type="password" autocomplete="new-password" minlength="10" required></div></div>
+        <div class="field"><label for="fg2-p1">Новый пароль</label><input class="input" id="fg2-p1" type="password" autocomplete="new-password" minlength="12" required></div></div>
       <div id="fg2-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="fg2-btn">Сменить пароль</button>
       <button class="btn ghost" type="button" data-act="auth-mode" data-m="forgot">← Отправить код заново</button>
     </form>${foot}</div>`;
+  if (S.authMode==='verify') return `<div class="login">${brand}<form class="card" id="verify-email-form"><h2>Подтвердите email</h2><label for="ve-email">Почта</label><input class="input" type="email" id="ve-email" value="${esc(S.verifyEmail||'')}" required><label for="ve-code">Код из письма</label><input class="input" id="ve-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"><p class="small muted">Подтверждение почты не заменяет одобрение владельца. Код действует 15 минут.</p><button class="btn primary" type="submit">Подтвердить</button><button class="btn" type="button" data-act="verify-resend">Отправить код</button><button class="btn ghost" type="button" data-act="auth-mode" data-m="login">Ко входу</button></form>${foot}</div>`;
   if (S.authMode==='done') return `<div class="login">${brand}<div class="card"><h2 style="font-size:28px">Заявка отправлена</h2>
     <p>Владелец получил уведомление. Как только он подтвердит доступ, войдите с вашей почтой или телефоном и паролем.</p>
     <button class="btn primary" data-act="auth-mode" data-m="login">Ко входу</button></div></div>`;
@@ -1907,8 +2101,8 @@ function viewLogin(){
         ${Object.entries(ROLES).map(([k,v],i) => `<label class="chip${(S.regRole||'admin')===k?' on':''}"><input type="radio" name="rg-role" value="${k}"${(S.regRole||'admin')===k?' checked':''} hidden>${v}</label>`).join('')}</div></div>
       <div class="grid2"><div class="field"><label for="rg-phone">Телефон</label><input class="input" id="rg-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 123-45-67" required></div>
       <div class="field"><label for="rg-mail">Почта</label><input class="input" id="rg-mail" type="email" autocomplete="email" placeholder="name@mail.ru" required></div>
-      <div class="field"><label for="rg-p1">Пароль</label><input class="input" id="rg-p1" type="password" autocomplete="new-password" minlength="10" required></div>
-      <div class="field"><label for="rg-p2">Пароль ещё раз</label><input class="input" id="rg-p2" type="password" autocomplete="new-password" minlength="10" required></div></div>
+      <div class="field"><label for="rg-p1">Пароль</label><input class="input" id="rg-p1" type="password" autocomplete="new-password" minlength="12" required></div>
+      <div class="field"><label for="rg-p2">Пароль ещё раз</label><input class="input" id="rg-p2" type="password" autocomplete="new-password" minlength="12" required></div></div>
       <label class="small" style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="rg-agree" required style="margin-top:3px;accent-color:var(--accent)">Согласен(на) на обработку персональных данных для работы в панели студии</label>
       <div id="rg-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="rg-btn">Отправить заявку</button>
@@ -2200,19 +2394,24 @@ function viewStats(){
 }
 
 /* --- Выплаты --- */
+function setPayoutPeriod(month){
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return;
+  S.payoutPeriodMonth=month;const bounds=monthBounds(month);
+  ['pf-from','pf-to'].forEach((id,index)=>{const input=document.getElementById(id);input.min=bounds.from;input.max=bounds.to;input.value=index?bounds.to:bounds.from;});
+}
 function viewPay(){
   const owner = Rules.seeAmounts(S.user);
   const recips = [...S.data.users.filter(u => u.active && u.status==='active').map(u => ({ id:u.id, label:`${u.name} · ${rolesOf(u).map(r => ROLES[r].toLowerCase()).join(' + ')}` })),
     ...(S.data.trainers||[]).filter(t => t.active).map(t => ({ id:t.id, label:`${t.fullName} · тренер${t.userId ? ' (за занятия)' : ''}` }))];
   const inMonth = p => payoutMonth(p)===S.payMonth;
-  const mStart = S.payMonth+'-01', mEnd = ymd(new Date(Number(S.payMonth.slice(0,4)), Number(S.payMonth.slice(5)), 0));
+  const periodMonth=S.payoutPeriodMonth||S.payMonth; const {from:mStart,to:mEnd}=monthBounds(periodMonth);
   const list = S.data.payouts.filter(inMonth).filter(p => !isPureSmm(S.user) || p.recipient===S.user.id).sort((a,b) => (!!a.issuedAt - !!b.issuedAt) || (b.plannedDate||'').localeCompare(a.plannedDate||''));
   const pending = list.filter(p => !p.issuedAt).length;
   const totals = owner ? Object.values(list.reduce((acc,p) => { const k=p.recipient; acc[k] = acc[k] || { id:k, sum:0, issued:0, n:0 }; acc[k].sum+=p.amount; acc[k].n++; if(p.issuedAt) acc[k].issued+=p.amount; return acc; }, {})) : [];
   const form = owner ? `<form class="card" id="pay-form"><div class="card-h"><h3>Новая выплата</h3><span class="small muted">видит только владелец; админы и управляющий отмечают выдачу конверта</span></div>
     <div class="grid3">
       <div class="field"><label for="pf-r">Кому</label><select class="input" id="pf-r" required><option value="">Выберите</option><optgroup label="Сотрудники">${recips.filter(r=>!r.id.startsWith('tr')).map(r=>`<option value="${r.id}">${esc(r.label)}</option>`).join('')}</optgroup><optgroup label="Тренеры">${recips.filter(r=>r.id.startsWith('tr')).map(r=>`<option value="${r.id}">${esc(r.label)}</option>`).join('')}</optgroup></select></div>
-      <div class="field"><span class="small muted" style="font-weight:600">За период (в пределах месяца)</span><div class="range"><input class="input" type="date" id="pf-from" value="${mStart}" min="${mStart}" max="${mEnd}" aria-label="С" required><span>—</span><input class="input" type="date" id="pf-to" value="${mEnd}" min="${mStart}" max="${mEnd}" aria-label="По" required></div>
+      <div class="field"><label for="pf-month">За какой месяц платим</label><input class="input" type="month" id="pf-month" value="${periodMonth}" required><button type="button" class="btn sm ghost" data-act="pf-previous">Прошлый месяц</button><span class="small muted" style="font-weight:600">За период (в пределах месяца)</span><div class="range"><input class="input" type="date" id="pf-from" value="${mStart}" min="${mStart}" max="${mEnd}" aria-label="С" required><span>—</span><input class="input" type="date" id="pf-to" value="${mEnd}" min="${mStart}" max="${mEnd}" aria-label="По" required></div>
         <div class="chips" style="margin-top:6px"><button type="button" class="chip" data-act="pf-range" data-k="h1">1–15</button><button type="button" class="chip" data-act="pf-range" data-k="h2">16–конец</button><button type="button" class="chip" data-act="pf-range" data-k="all">Весь месяц</button></div></div>
       <div class="field"><label for="pf-a">Сумма, ₽</label><input class="input num" id="pf-a" type="number" min="1" step="1" inputmode="numeric" required></div>
       <div class="field"><label for="pf-d">Дата выдачи (план)</label><input class="input" id="pf-d" type="date" value="${todayStr()}"></div>
@@ -2535,13 +2734,13 @@ function renderModal(){
   if (m.type==='task') return taskModal(m);
   if (m.type==='export') return exportModal(m);
   if (m.type==='pass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="pass-form" data-id="${m.id}" style="max-width:420px"><div class="modal-h"><h3>Новый пароль · ${esc(nameOf(m.id))}</h3>${closeX}</div>
-    <div class="field"><label for="pw-1">Пароль (от 10 символов)</label><input class="input" id="pw-1" type="password" minlength="10" required autocomplete="new-password"></div>
+    <div class="field"><label for="pw-1">Пароль (от 12 символов)</label><input class="input" id="pw-1" type="password" minlength="12" required autocomplete="new-password"></div>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
   /* Смена СВОЕГО пароля (профиль → «Сменить пароль») */
   if (m.type==='changepass') return `<div class="overlay" data-act="close-bg"><form class="modal" id="changepass-form" style="max-width:420px"><div class="modal-h"><h3>Сменить мой пароль</h3>${closeX}</div>
     <div class="field"><label for="cp-0">Старый пароль</label><input class="input" id="cp-0" type="password" autocomplete="current-password" required></div>
-    <div class="field"><label for="cp-1">Новый пароль (от 10 символов)</label><input class="input" id="cp-1" type="password" minlength="10" autocomplete="new-password" required></div>
-    <div class="field"><label for="cp-2">Новый пароль ещё раз</label><input class="input" id="cp-2" type="password" minlength="10" autocomplete="new-password" required></div>
+    <div class="field"><label for="cp-1">Новый пароль (от 12 символов)</label><input class="input" id="cp-1" type="password" minlength="12" autocomplete="new-password" required></div>
+    <div class="field"><label for="cp-2">Новый пароль ещё раз</label><input class="input" id="cp-2" type="password" minlength="12" autocomplete="new-password" required></div>
     <p class="small muted">После смены пароля все другие устройства, где вы были в панели, попросят вход заново.</p>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сменить</button></div></form></div>`;
   /* Важные контакты: добавление/редактирование */
@@ -2625,6 +2824,24 @@ function linkedSection(t, canEdit){
       ${cands.length ? `<select class="input pill" id="link-existing" data-id="${t.id}" aria-label="Привязать существующую задачу"><option value="">Привязать существующую…</option>${cands.map(c => `<option value="${c.id}">${esc(c.title.slice(0,60))}</option>`).join('')}</select>` : ''}</div>` : ''}</div>`;
 }
 
+/* Файлы скачиваются только через API с повторной проверкой доступа к задаче. */
+function taskAttachments(t){
+  if(!(S.data.capabilities||[]).includes('task-files-v1')) return '<p class="small muted">Фото и файлы станут доступны после публикации сервера v7. Обновите существующее развертывание Apps Script новой версией.</p>';
+  if(!t.id) return '<p class="small muted">Чтобы прикрепить фото или файл, сначала сохраните задачу.</p>';
+  const edit=Rules.canEditTask(S.user,t)||isParticipant(S.user,t);
+  return `<section class="task-attachments"><h4>Фото и файлы · ${(t.attachments||[]).length}/8</h4>
+    ${(t.attachments||[]).map(file=>`<div class="attachment-row"><div><b>${esc(file.name)}</b><span class="small muted">${Math.ceil(file.size/1024)} КБ · ${esc(nameOf(file.by))} · ${esc(fmtDT(file.at))}</span></div><button class="btn sm" type="button" data-act="attachment-download" data-task="${esc(t.id)}" data-id="${esc(file.id)}">${file.mime.startsWith('image/')?'Открыть фото':'Скачать'}</button>${Rules.canDeleteTask(S.user,t)||file.by===S.user.id?`<button class="btn ghost sm" type="button" data-act="attachment-delete" data-task="${esc(t.id)}" data-id="${esc(file.id)}" aria-label="Удалить вложение">✕</button>`:''}</div>`).join('')||'<p class="muted small">Вложений пока нет.</p>'}
+    ${edit?`<label class="btn sm attachment-pick">Добавить фото или файл<input type="file" id="task-attachment-input" data-task="${esc(t.id)}" accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/csv,.txt,.csv" multiple></label><p class="small muted">JPEG, PNG, WebP, PDF, TXT, CSV. Фото сжимаются; каждый сохранённый файл — до 1 МБ, всего до 4 МБ. Документы Word/Excel экспортируйте в PDF.</p>`:''}</section>`;
+}
+async function readTaskFile(file){
+  if(['image/jpeg','image/png','image/webp'].includes(file.type)) {
+    const img=await inventoryImages(file);
+    return {name:file.name.replace(/\.[^.]+$/,'')+'.jpg',mime:'image/jpeg',data:img.photo.split(',')[1]};
+  }
+  if(file.size>1048576) throw new Error('Размер документа — не больше 1 МБ.');
+  const result=await new Promise((ok,bad)=>{const reader=new FileReader();reader.onload=()=>ok(reader.result);reader.onerror=()=>bad(new Error('Не удалось прочитать файл.'));reader.readAsDataURL(file);});
+  const spec=attachmentSpec({name:file.name,data:String(result).split(',')[1]});if(!spec) throw new Error('Разрешены PDF, TXT, CSV и фотографии. Проверьте формат файла.');return spec;
+}
 function taskModal(m){
   const t = m.task; const isNew = !t.id;
   const canEdit = isNew || Rules.canEditTask(S.user, t);
@@ -2651,7 +2868,7 @@ function taskModal(m){
       ${t.checklist?.length ? checklistBlock(t, true) : ''}
       ${linkedSection(t, false)}
       ${movesList(t)}
-      ${commentsBlock(t)}
+      ${taskAttachments(t)}${commentsBlock(t)}
       ${footerInfo}
       <div class="modal-f">${isOpen(t) ? `<button class="btn" data-act="move" data-id="${t.id}">Перенести</button>` : ''}${isOpen(t) ? `<button class="btn primary" data-act="quick-done" data-id="${t.id}">✓ Готово</button>` : t.status==='done' ? `<button class="btn" data-act="reopen" data-id="${t.id}">Вернуть в работу</button>` : ''}<span class="spacer"></span><button class="btn" data-act="close">Закрыть</button></div></div></div>`;
   }
@@ -2680,7 +2897,8 @@ function taskModal(m){
     ${(isOwner(S.user) || isManager(S.user)) && !hasLinks(t) ? checklistEditor(m, t.checklist) : (t.checklist?.length && !isNew ? checklistBlock(t, true) : '')}
     ${!isNew && !t.parentId && !t.checklist?.length ? linkedSection(t, true) : ''}
     ${!isNew ? movesList(t) : ''}
-    ${isNew && m.repeat ? '' : isNew ? `<div class="field"><label for="tf-com">Комментарий</label><textarea class="input" id="tf-com" rows="2" placeholder="Необязательно: уточнение, ссылка, договорённость"></textarea></div>` : commentsBlock(t)}
+    ${isNew ? taskAttachments(t) : ''}
+    ${isNew && m.repeat ? '' : isNew ? `<div class="field"><label for="tf-com">Комментарий</label><textarea class="input" id="tf-com" rows="2" placeholder="Необязательно: уточнение, ссылка, договорённость"></textarea></div>` : taskAttachments(t)+commentsBlock(t)}
     ${footerInfo}
     <div id="tf-err" class="small" style="color:var(--st-over)" role="alert"></div>
     <div class="modal-f">${canDel?`<button type="button" class="btn danger" data-act="del-task" data-id="${t.id}">Удалить</button>`:''}<span class="spacer"></span><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">${isNew?(m.repeat?'Создать регулярную':'Создать'):'Сохранить'}</button></div>
@@ -3150,17 +3368,17 @@ function calcFinance(M){
   const fixed = cfg.expenses.map(e => ({ ...e, sum: f.fixed[e.k]===undefined ? (Number(e.def)||0) : (Number(f.fixed[e.k])||0) }));
   const fixedTotal = fixed.reduce((x,e) => x+e.sum, 0);
   const sumList = arr => (arr||[]).reduce((x,i) => x+(Number(i.amount)||0), 0);
-  const purchasesTotal = sumList(f.purchases), utilitiesTotal = sumList(f.utilities), customTotal = sumList(f.custom);
+  const purchasesTotal = sumList(f.purchases), utilitiesTotal = sumList(f.utilities), marketingTotal = sumList(f.marketing), customTotal = sumList(f.custom);
   const tax = Math.round(incomeTotal * (Number(f.taxRate)||0) / 100);
-  const expensesTotal = fot.accrued + otherPaid + fixedTotal + purchasesTotal + utilitiesTotal + customTotal + tax;
+  const expensesTotal = fot.accrued + otherPaid + fixedTotal + purchasesTotal + utilitiesTotal + marketingTotal + customTotal + tax;
   const profit = incomeTotal - expensesTotal;
   /* Собственники — динамический список (в демо — Влад и Катя). Свои средства/операции считаем по каждому. */
-  const owners = (S.data.users||[]).filter(u => isOwner(u)).map(u => ({ id:u.id, name:u.name, active:u.active && u.status==='active' }));
-  const personal = {}; owners.forEach(o => { personal[o.id] = 0; }); [...(f.purchases||[]), ...(f.utilities||[]), ...(f.custom||[])].forEach(i => { if (personal[i.payer]!==undefined) personal[i.payer] += Number(i.amount)||0; });
+  const owners = (S.data.users||[]).filter(u => isOwner(u)).map(u => ({ id:u.id, name:/екатерин/i.test(u.fullName||'')?'Екатерина':/владислав/i.test(u.fullName||'')?'Владислав':u.name, active:u.active && u.status==='active' }));
+  const personal = {}; owners.forEach(o => { personal[o.id] = 0; }); [...(f.purchases||[]), ...(f.utilities||[]), ...(f.marketing||[]), ...(f.custom||[])].forEach(i => { if (personal[i.payer]!==undefined) personal[i.payer] += Number(i.amount)||0; });
   const ops = f.ownerOps||[]; const opSum = (o,t) => ops.filter(x => x.owner===o && x.type===t).reduce((s,x) => s+(Number(x.amount)||0), 0);
   const dividends = owners.reduce((a,o) => a + opSum(o.id,'div'), 0);
   const debtBal = (S.data.debt||[]).reduce((x,d) => x + (d.type==='loan' ? d.amount : -d.amount), 0);
-  return { f, cfg, income, incomeTotal, fotRows, paid, fot, otherPaid, fixed, fixedTotal, purchasesTotal, utilitiesTotal, customTotal, tax, expensesTotal, profit,
+  return { f, cfg, income, incomeTotal, fotRows, paid, fot, otherPaid, fixed, fixedTotal, purchasesTotal, utilitiesTotal, marketingTotal, customTotal, tax, expensesTotal, profit,
     personal, ops, opSum, owners, dividends, remainder: profit - dividends, debtBal, salesCount: sales.length };
 }
 const numIn = (path, val, label, ph) => `<input class="input num money-in" type="number" step="1" inputmode="numeric" data-fin="${path}" value="${val||''}" placeholder="${ph??0}" aria-label="${esc(label)}">`;
@@ -3177,7 +3395,44 @@ function finList(kind, title, items, hint, withPayer){
       ${withPayer?`<select class="input" name="payer" aria-label="Кто оплатил">${payersList().map(p => `<option value="${p.k}">${esc(p.name)}</option>`).join('')}</select>`:''}<button class="btn sm primary" type="submit">Добавить</button></form></div>`;
 }
 
+/* Два независимых журнала: обязательства студии и личные расчёты владельцев. */
+function studioDebtSection(c){
+  const rows=(S.data.debt||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  const cards=c.owners.map(owner=>{
+    let balance=0;const own=rows.filter(x=>x.owner===owner.id);
+    return `<section class="card"><div class="card-h"><h3>Студия → ${esc(owner.name)}</h3><b class="num">${money(debtBalance(own))}</b></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата / операция</th><th class="r">Сумма</th><th class="r">Остаток</th><th></th></tr></thead><tbody>${own.map(d=>{
+        balance+=d.type==='loan'?Number(d.amount):-Number(d.amount);
+        return `<tr><td>${esc(d.date)}<div class="small">${d.type==='loan'?'Вложение в студию':'Возврат студией'}</div><div class="small muted">${esc(d.note||'')}</div></td><td class="r">${d.type==='loan'?'+':'−'}${money(d.amount)}</td><td class="r">${money(balance)}</td><td><button type="button" class="btn sm ghost" data-act="debt-del" data-id="${esc(d.id)}" aria-label="Удалить запись долга">✕</button></td></tr>`;
+      }).join('')||'<tr><td colspan="4" class="muted">Операций пока нет.</td></tr>'}</tbody></table></div>
+      <form class="fin-add studio-debt-form"><input type="hidden" name="owner" value="${esc(owner.id)}"><select class="input" name="type" aria-label="Операция"><option value="loan">Вложение в студию</option><option value="repay">Студия вернула</option></select><input class="input" name="date" type="date" value="${todayStr()}" required aria-label="Дата операции"><input class="input" type="number" name="amount" step="0.01" min="0.01" max="1000000000" placeholder="Сумма, ₽" required aria-label="Сумма"><input class="input" name="note" maxlength="500" placeholder="Комментарий" aria-label="Комментарий"><button class="btn primary sm" type="submit">Добавить</button></form>
+    </section>`;
+  });
+  const unassigned=rows.filter(d=>!c.owners.some(o=>o.id===d.owner));
+  return `<section><div class="toolbar"><h2>5. Долг студии перед собственниками</h2><span class="spacer"></span><b>${money(c.debtBal)}</b></div><div class="debt-columns">${cards.join('')}</div>${unassigned.length?'<p class="note">Есть старые операции с владельцами, отсутствующими в списке. Они включены в общий долг; проверьте исходную таблицу перед изменением.</p>':''}
+    ${(c.owners||[]).some(o=>c.personal[o.id])?'<button type="button" class="btn" data-act="debt-from-personal">Перенести личные затраты месяца в долг студии</button>':''}</section>`;
+}
+function personalDebtSection(){
+  const owners=(S.data.users||[]).filter(isOwner);
+  const debtor=owners.find(o=>/екатерин|катя/i.test(o.fullName+' '+o.name)),creditor=owners.find(o=>/владислав/i.test(o.fullName+' '+o.name));
+  if(!debtor||!creditor) return '<section class="card"><h2>6. Долг Екатерины перед Владиславом</h2><p>Для учёта нужны два владельца с именами Екатерина и Владислав в разделе «Команда».</p></section>';
+  const rows=(S.data.personalDebt||[]).filter(x=>x.debtor===debtor.id&&x.creditor===creditor.id).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  let running=0;const balance=debtBalance(rows);
+  return `<section class="card personal-debt"><div class="card-h"><h2>6. Долг Екатерины перед Владиславом</h2><b class="num">${money(balance)}</b></div><p class="small muted">Личные расчёты — не входят в доходы, расходы и долг студии.${balance<0?' Отрицательный остаток означает переплату Екатерины.':''}</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Операция</th><th class="r">Сумма</th><th class="r">Остаток</th><th>Кто внёс</th><th></th></tr></thead><tbody>${rows.map(x=>{running+=x.type==='borrow'?Number(x.amount):-Number(x.amount);return `<tr><td>${esc(x.date)}</td><td>${x.type==='borrow'?'Екатерина взяла у Владислава':'Екатерина вернула Владиславу'}<div class="small muted">${esc(x.note)}</div></td><td class="r">${money(x.amount)}</td><td class="r">${money(running)}</td><td>${esc(nameOf(x.createdBy))}<div class="small muted">${esc(fmtDT(x.createdAt))}</div></td><td><button type="button" class="btn ghost sm" data-act="personal-debt-delete" data-id="${esc(x.id)}">Удалить</button></td></tr>`;}).join('')||'<tr><td colspan="6" class="muted">Личных операций пока нет.</td></tr>'}</tbody></table></div>
+    <form id="personal-debt-form" class="fin-add"><input type="hidden" name="debtor" value="${esc(debtor.id)}"><input type="hidden" name="creditor" value="${esc(creditor.id)}"><select class="input" name="type" aria-label="Операция личного долга"><option value="borrow">Екатерина взяла у Владислава</option><option value="repay">Екатерина вернула Владиславу</option></select><input class="input" name="date" type="date" value="${todayStr()}" required aria-label="Дата личной операции"><input class="input" name="amount" type="number" min="0.01" step="0.01" max="1000000000" required placeholder="Сумма, ₽" aria-label="Сумма личной операции"><input class="input" name="note" maxlength="500" placeholder="Комментарий" aria-label="Комментарий личной операции"><button class="btn primary sm" type="submit">Записать</button></form></section>`;
+}
+function viewExpenseTab(kind){
+  if(!Rules.canSeeFinance(S.user)) return '<p>Доступ только владельцам.</p>';
+  if(!(S.data.capabilities||[]).includes('finance-v2')) return serverFinanceNotice();
+  const title=kind==='marketing'?'Маркетинг и реклама':'Коммуналка и сервисы';
+  if(!(S.data.finance||{})[S.finMonth]) { viewFin();return '<p class="muted">Загружаю расходы…</p>'; }
+  return `<div class="toolbar"><h2>${title}</h2><span class="spacer"></span><label for="f-finmonth">Месяц</label><input class="input" type="month" id="f-finmonth" value="${S.finMonth}"><button type="button" class="btn" data-act="view" data-v="fin">Общие финансы</button></div><p class="small muted">Расходы за ${monthName(S.finMonth).toLowerCase()} входят в общий финансовый результат студии.</p>${finList(kind,title,finMonthData()[kind]||[],kind==='utilities'?'Регулярные сервисы переносятся в следующий месяц автоматически.':'Добавьте размещение, площадку или рекламную кампанию. В новый месяц список автоматически не копируется.',true)}`;
+}
+
+function serverFinanceNotice(){return '<div class="card"><h3>Требуется обновление сервера</h3><p>Этот раздел использует сервер v7. Замените Code.gs и опубликуйте новую версию существующего развертывания Apps Script, затем обновите страницу. Адрес API_URL должен остаться прежним.</p></div>';}
 function viewFin(){
+  if(!(S.data.capabilities||[]).includes('finance-v2')) return serverFinanceNotice();
   const M = S.finMonth;
   if (!(S.data.finance||{})[M]){ if (!S.finLoading){ S.finLoading = true; Api.call('getFinance', { month:M }).then(fin => { S.data.finance = fin; S.finLoading=false; render(); }).catch(e => { S.finLoading=false; toast(e.message, true); }); }
     return `<div class="toolbar"><h2>Финансы</h2></div><div class="empty">Загружаю ${monthName(M).toLowerCase()}…</div>`; }
@@ -3208,10 +3463,11 @@ function viewFin(){
       ${c.otherPaid ? `<tr><td>Выдано сверх начисленного</td><td></td><td class="r"><b>${money(c.otherPaid)}</b></td><td></td></tr>` : ''}
       <tr class="sum"><td>Итого ФОТ</td><td></td><td class="r">${money(c.fot.accrued + c.otherPaid)}</td><td class="r">${money(c.fot.paid)}</td></tr>
       <tr class="grp"><td colspan="4">Постоянные и прочие расходы</td></tr>
-      ${c.fixed.map(expRow).join('')}
+      ${c.fixed.filter(x=>x.k!=='marketing').map(expRow).join('')}
       <tr><td colspan="4"><form class="fin-add" id="cfg-add-expenses"><input class="input" name="name" placeholder="Новая статья расхода" required aria-label="Название"><input class="input num" name="def" type="number" min="0" step="100" placeholder="Сумма по умолчанию" aria-label="Сумма по умолчанию"><button class="btn sm primary" type="submit">+ Добавить</button></form></td></tr>
       <tr><td>Затраты на расходники<div class="small muted">список ниже</div></td><td></td><td class="r" colspan="2"><b>${money(c.purchasesTotal)}</b></td></tr>
-      <tr><td>Коммуналка и сервисы<div class="small muted">список ниже</div></td><td></td><td class="r" colspan="2"><b>${money(c.utilitiesTotal)}</b></td></tr>
+      <tr><td><button type="button" class="btn ghost sm" data-act="view" data-v="marketing">Маркетинг и реклама →</button></td><td></td><td class="r" colspan="2"><b>${money(c.marketingTotal)}</b></td></tr>
+      <tr><td><button type="button" class="btn ghost sm" data-act="view" data-v="utilities">Коммуналка и сервисы →</button></td><td></td><td class="r" colspan="2"><b>${money(c.utilitiesTotal)}</b></td></tr>
       <tr><td>Затраты собственников</td><td></td><td class="r" colspan="2"><b>${money(c.customTotal)}</b></td></tr>
       <tr><td>Налоги и банк<div class="small muted">% от доходов</div></td><td class="r"><span class="pct-in"><input class="input num" type="number" min="0" max="30" step="0.1" data-fin="taxRate" value="${c.f.taxRate}" aria-label="Процент налогов и банка">%</span></td><td class="r" colspan="2"><b>${money(c.tax)}</b></td></tr>
       <tr class="sum"><td>Итого расходов</td><td></td><td class="r" colspan="2">${money(c.expensesTotal)}</td></tr></tbody></table></div>
@@ -3231,23 +3487,13 @@ function viewFin(){
     <form class="fin-add" data-kind="ownerOps"><select class="input" name="owner" aria-label="Кто">${c.owners.filter(o => o.active).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
       <select class="input" name="type" aria-label="Операция"><option value="in">Внёс в студию</option><option value="div">Вывел дивиденды</option></select>
       <input class="input" name="date" type="date" value="${todayStr()}" aria-label="Дата"><input class="input num" name="amount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма" required aria-label="Сумма"><button class="btn sm primary" type="submit">Добавить</button></form></div>`;
-  const debt = (S.data.debt||[]).slice().sort((a,b) => a.date.localeCompare(b.date)); let run = 0;
-  const debtCard = `<div class="card"><div class="card-h"><h3>5. Долг студии перед собственниками</h3><b class="num" style="font-size:20px">${money(c.debtBal)}</b></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Кто</th><th>Операция</th><th class="r">Сумма</th><th class="r">Остаток долга</th>${ed?'<th></th>':''}</tr></thead><tbody>
-    ${debt.map(d => { run += d.type==='loan' ? d.amount : -d.amount; return `<tr><td class="num">${fmtDayShort(d.date)}.${d.date.slice(2,4)}</td><td>${esc(nameOf(d.owner))}</td><td>${d.type==='loan'?'Вложил(а) в студию':'Студия вернула'}${d.note?`<div class="small muted">${esc(d.note)}</div>`:''}</td>
-      <td class="r" style="color:${d.type==='loan'?'var(--st-over)':'var(--st-done)'}">${d.type==='loan'?'+':'−'}${money(d.amount)}</td><td class="r"><b>${money(run)}</b></td>${ed?`<td class="r"><button class="btn ghost sm" data-act="debt-del" data-id="${d.id}" aria-label="Удалить">✕</button></td>`:''}</tr>`; }).join('')}</tbody></table></div>
-    ${(c.owners||[]).some(o => c.personal[o.id]) ? `<div class="note">В этом месяце из личных средств оплачено: ${c.owners.filter(o => c.personal[o.id]).map(o => `${esc(o.name)} ${money(c.personal[o.id])}`).join(', ')}. <button class="btn sm" data-act="debt-from-personal">Добавить в долг студии</button></div>` : ''}
-    <form class="fin-add" id="debt-form"><select class="input" name="owner" aria-label="Кто">${c.owners.filter(o => o.active).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
-      <select class="input" name="type" aria-label="Операция"><option value="loan">Вложил(а) в студию</option><option value="repay">Студия вернула</option></select>
-      <input class="input" name="date" type="date" value="${todayStr()}" aria-label="Дата"><input class="input num" name="amount" type="number" min="1" step="1" inputmode="numeric" placeholder="Сумма" required aria-label="Сумма">
-      <input class="input" name="note" placeholder="Комментарий" aria-label="Комментарий"><button class="btn sm primary" type="submit">Добавить</button></form></div>`;
+  const debtCard = studioDebtSection(c);
   return `<div style="display:flex;flex-direction:column;gap:18px">
     <div class="toolbar"><h2>Финансы</h2><span class="tag lvl-owners">видят только владельцы</span><span class="spacer"></span>
       <label class="small muted" for="f-finmonth">Месяц</label><input class="input pill" type="month" id="f-finmonth" value="${M}"></div>
     <div class="bigkpis">${tile('Доходы', c.incomeTotal, monthName(M))}${tile('Расходы', c.expensesTotal, 'вкл. зарплаты и налоги')}${tile(c.profit>=0?'Прибыль':'Убыток', c.profit, 'доходы − расходы', c.profit>=0?'var(--st-done)':'var(--st-over)')}${tile('Долг студии', c.debtBal, 'перед собственниками', c.debtBal>0?'var(--st-over)':'')}</div>
     <div class="fin-grid"><div class="fin-col">${incomeCard}${resCard}${ownerOpsCard}</div><div class="fin-col">${expCard}</div></div>
     <div class="fin-grid three">${finList('purchases','Закупки товаров и расходников', c.f.purchases, 'Если платили из своих — выберите, кто.', true)}
-      ${finList('utilities','Коммуналка и сервисы', c.f.utilities, 'Переносятся в следующий месяц автоматически.', true)}
       ${finList('custom','Затраты собственников', c.f.custom, 'Ваши личные траты на студию.', true)}</div>
     <div class="card">
       <div class="card-h">
@@ -3261,7 +3507,7 @@ function viewFin(){
       </div>
       <div id="csv-preview-area" style="margin-top:12px"></div>
     </div>
-    ${debtCard}</div>`;
+    ${debtCard}${personalDebtSection()}</div>`;
 }
 
 /* --- График администраторов: видят все, правят управляющий и владельцы --- */
@@ -3619,7 +3865,7 @@ async function downloadPdf(kind){
   await loadScript(CONFIG.HTML2PDF_URL, 'html2pdf');
   const el = document.getElementById('report-src');
   const name = kind==='stats' ? `statistika_${S.date}.pdf` : `otchet_zadachi_${S.date}.pdf`;
-  await window.html2pdf().set({ margin:10, filename:name, html2canvas:{ scale:2, backgroundColor:'#ffffff' }, jsPDF:{ unit:'mm', format:'a4', orientation:'landscape' } }).from(el).save();
+  await window.html2pdf().set({ margin:10, filename:name, jsPDF:{ unit:'mm', format:'a4', orientation:'landscape' } }).from(el).save();
 }
 
 /** Парсер CSV выгрузки заказов студии (разделитель ;, кавычки, RU-даты и числа). */
@@ -3807,6 +4053,19 @@ const blankTask = extra => ({ id:'', title:'', desc:'', level: isPureSmm(S.user)
 const finMonthData = () => S.data.finance[S.finMonth];
 async function saveFin(data){ S.data.finance = await Api.call('saveFinance', { month:S.finMonth, data }); }
 
+root.addEventListener('change',e=>{
+  if(e.target.id!=='task-attachment-input'||!e.target.files?.length) return;
+  const files=[...e.target.files],taskId=e.target.dataset.task,modal=S.modal;
+  if(S.busy){toast('Дождитесь завершения текущей операции.',true);e.target.value='';return;}
+  const draft=document.getElementById('task-form')?readTaskForm():{};
+  run(async()=>{
+    for(const file of files){
+      const payload=await readTaskFile(file);const r=await Api.call('addTaskAttachment',{taskId,file:payload,requestId:uid('upload')});replaceIn(S.data.tasks,r.task);
+      if(S.modal===modal) modal.task={...modal.task,...draft,attachments:r.task.attachments};
+    }
+    if(S.modal===modal)render();
+  },'Вложения сохранены');
+});
 root.addEventListener('change', async e=>{
   const el=e.target;
   if (el.id==='inventory-query' || el.id==='inventory-kind') {
@@ -3832,6 +4091,7 @@ root.addEventListener('click', e => {
   switch(act){
     /* вход и регистрация */
     case 'pick-login': S.loginPick = el.dataset.l; render(); document.getElementById('lg-btn')?.focus(); break;
+    case 'verify-resend': run(async()=>{S.verifyEmail=document.getElementById('ve-email').value;await Api.call('requestEmailVerification',{email:S.verifyEmail});toast('Если заявка существует, код отправлен. Повторная отправка доступна через минуту.');});break;
     case 'auth-mode': S.authMode = el.dataset.m; render(); break;
     case 'logout': Auth.logout(); break;
     case 'boot-retry': S.bootError=''; run(async () => { await loadAll(); }); break;
@@ -4061,7 +4321,8 @@ root.addEventListener('click', e => {
       run(async () => { const r = await Api.call('tgLinkCode'); S.tgPending = true; window.open(`https://t.me/${CONFIG.TG_BOT}?start=${r.code}`, '_blank'); toast('В Telegram нажмите «Старт». Потом вернитесь сюда — статус обновится в течение минуты.'); }); break;
     case 'more': S.modal = { type:'more' }; render(); break;
     /* выплаты: быстрый выбор периода */
-    case 'pf-range': { const M = S.payMonth; const last = ymd(new Date(Number(M.slice(0,4)), Number(M.slice(5)), 0)); const k = el.dataset.k;
+    case 'pf-previous': {const month=shiftedMonth(todayStr().slice(0,7),-1);document.getElementById('pf-month').value=month;setPayoutPeriod(month);break;}
+    case 'pf-range': { const M = document.getElementById('pf-month').value; const last = ymd(new Date(Number(M.slice(0,4)), Number(M.slice(5)), 0)); const k = el.dataset.k;
       document.getElementById('pf-from').value = k==='h2' ? M+'-16' : M+'-01'; document.getElementById('pf-to').value = k==='h1' ? M+'-15' : last; break; }
     case 'extra-role': { const u = userById(id); const r = el.dataset.r; const has = (u.extraRoles||[]).includes(r);
       run(async () => { const x = await Api.call('saveUser', { user:{ id, extraRoles: has ? u.extraRoles.filter(z => z!==r) : [...(u.extraRoles||[]), r] } });
@@ -4086,7 +4347,15 @@ root.addEventListener('click', e => {
       S.modal = { type:'confirm', title:`Удалить «${item?.name||''}»?`, text: kind==='income' ? 'Строка пропадёт из доходов во всех месяцах. Если к ней шли продажи из журнала, они попадут в «Прочие продажи».' : 'Статья пропадёт из расходов во всех месяцах.',
         on: async () => { cfg[kind] = cfg[kind].filter(x => x.k!==k); S.data.finConfig = await Api.call('saveFinConfig', { config:cfg }); toast('Удалено'); } }; render(); break; }
     /* финансы */
-    case 'fin-del': { const kind = el.dataset.kind; run(async () => { await saveFin({ [kind]: (finMonthData()[kind]||[]).filter(x => x.id!==id) }); render(); }, 'Удалено'); break; }
+    case 'fin-del': { const kind=el.dataset.kind;const item=(finMonthData()[kind]||[]).find(x=>x.id===id);run(async()=>{S.data.finance=await Api.call('deleteFinanceItem',{month:S.finMonth,kind,id,expectedUpdatedAt:item?.updatedAt});render();},'Удалено');break; }
+    case 'personal-debt-delete': S.modal={type:'confirm',title:'Удалить личную операцию?',text:'Изменится только личный долг Екатерины перед Владиславом.',on:async()=>{S.data.personalDebt=await Api.call('deletePersonalDebt',{id});}};render();break;
+    case 'attachment-download': run(async()=>{
+      const token=Api.token;const file=await Api.call('getTaskAttachment',{taskId:el.dataset.task,id});if(token!==Api.token||!S.user)return;
+      if(file.mime.startsWith('image/')) {S.modal={type:'img',src:'data:'+file.mime+';base64,'+file.data};render();return;}
+      const bytes=Uint8Array.from(atob(file.data),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:file.mime}));
+      const link=document.createElement('a');link.href=url;link.download=file.name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });break;
+    case 'attachment-delete': {const taskId=el.dataset.task;S.modal={type:'confirm',title:'Удалить вложение?',text:'Файл перестанет быть доступен из задачи.',on:async()=>{const r=await Api.call('deleteTaskAttachment',{taskId,id});replaceIn(S.data.tasks,r.task);S.modal={type:'task',task:JSON.parse(JSON.stringify(r.task))};}};render();break;}
     case 'debt-del': S.modal = { type:'confirm', title:'Удалить запись о долге?', text:'Остаток долга пересчитается.', on: async () => { S.data.debt = await Api.call('deleteDebt', { id }); toast('Удалено'); } }; render(); break;
     case 'csv-import-cancel': {
       const prev = document.getElementById('csv-preview-area');
@@ -4240,6 +4509,7 @@ root.addEventListener('change', e => {
   if (r.id==='f-level'){ S.level = r.value; render(); }
   if (r.id==='f-block'){ S.block = r.value; render(); }
   if (r.id==='f-seller'){ S.salesSeller = r.value; render(); }
+  if (r.id==='pf-month' && r.value){setPayoutPeriod(r.value);return;}
   if (r.id==='f-paymonth' && r.value){ S.payMonth = r.value; render(); }
   if (r.id==='f-salmonth' && r.value){ S.salMonth = r.value; render(); }
   if (r.id==='f-finmonth' && r.value){ S.finMonth = r.value; render(); }
@@ -4291,13 +4561,14 @@ root.addEventListener('submit', e => {
     }).catch(err => { box.textContent = err.message; btn.disabled = false; btn.textContent = 'Сменить пароль'; });
     return;
   }
+  if(f.id==='verify-email-form'){run(async()=>{await Api.call('confirmEmail',{email:v('ve-email'),code:v('ve-code')});S.authMode='done';render();},'Email подтверждён');return;}
   if (f.id==='reg-form'){
     const box = document.getElementById('rg-err');
     if (v('rg-p1') !== v('rg-p2')){ box.textContent = 'Пароли не совпадают.'; return; }
     if (!document.getElementById('rg-agree').checked){ box.textContent = 'Нужно согласие на обработку персональных данных.'; return; }
     const btn = document.getElementById('rg-btn'); btn.disabled = true;
     Api.call('register', { fullName:v('rg-fio'), role: document.querySelector('input[name="rg-role"]:checked')?.value, phone:v('rg-phone'), email:v('rg-mail'), pass:v('rg-p1') })
-      .then(() => { S.authMode = 'done'; render(); }).catch(err => { box.textContent = err.message; btn.disabled = false; });
+      .then(async r => {if(r.emailVerificationRequired){S.verifyEmail=v('rg-mail');S.authMode='verify';await Api.call('requestEmailVerification',{email:S.verifyEmail});}else S.authMode='done';render();}).catch(err => { box.textContent = err.message; btn.disabled = false; });
     return;
   }
   if (f.id==='task-form'){
@@ -4331,7 +4602,7 @@ root.addEventListener('submit', e => {
   }
   if (f.id==='adduser-form'){ const d = S.modal.d; const pw = v('au-pw');
     run(async () => { const u = await Api.call('addUser', { user:{ fullName:v('au-fio'), role:d.role, extraRoles:d.extra, phone:v('au-ph'), email:v('au-em'), login:v('au-lg'), pass:pw, avatar:d.avatar } });
-      S.data.users.push(u); S.modal = null; render(); toast(`${u.name} добавлен(а). Логин: ${u.login}, пароль: ${pw}`); }); return; }
+      S.data.users.push(u); S.modal = null; render(); toast(`${u.name} добавлен(а). Передайте временный пароль сотруднику лично.`); }); return; }
   if (f.id==='cfgren-form'){ const m = S.modal; const cfg = JSON.parse(JSON.stringify(S.data.finConfig)); const it = cfg[m.kind].find(x => x.k===m.k); if (!it) return;
     it.name = v('cr-n').trim() || it.name; if (m.kind==='income') it.group = v('cr-g').trim() || it.group;
     run(async () => { S.data.finConfig = await Api.call('saveFinConfig', { config:cfg }); S.modal = null; render(); }, 'Переименовано'); return; }
@@ -4366,7 +4637,7 @@ root.addEventListener('submit', e => {
     return;
   }
   if (f.id==='pay-form'){
-    run(async () => { const p = await Api.call('savePayout', { p:{ recipient:v('pf-r'), periodFrom:v('pf-from'), periodTo:v('pf-to'), amount:v('pf-a'), plannedDate:v('pf-d'), comment:v('pf-c') } }); S.data.payouts.push(p); render(); }, 'Конверт подготовлен');
+    run(async () => { const p = await Api.call('savePayout', { p:{ recipient:v('pf-r'), periodFrom:v('pf-from'), periodTo:v('pf-to'), amount:v('pf-a'), plannedDate:v('pf-d'), comment:v('pf-c') } }); S.data.payouts.push(p); S.payMonth=payoutMonth(p); render(); }, 'Конверт подготовлен');
     return;
   }
   if (f.id==='rev-form'){
@@ -4391,7 +4662,7 @@ root.addEventListener('submit', e => {
   }
   if (f.id==='pass-form'){
     const p = v('pw-1');
-    if (p.length < 10){ toast('Пароль — минимум 10 символов.', true); return; }
+    if (p.length < 12){ toast('Пароль — минимум 12 символов.', true); return; }
     run(async () => { await Api.call('saveUser', { user:{ id:f.dataset.id, pass:p } }); S.modal=null; render(); }, 'Пароль изменён');
     return;
   }
@@ -4460,7 +4731,11 @@ root.addEventListener('submit', e => {
       replaceIn(S.data.penalties, rec); S.modal=null; render(); }, 'Нарушение записано');
     return;
   }
-  if (f.id==='debt-form'){
+  if(f.id==='personal-debt-form'){
+    const entry=Object.fromEntries(new FormData(f).entries());const requestId=uid('pdreq');
+    run(async()=>{S.data.personalDebt=await Api.call('savePersonalDebt',{entry,requestId});render();},'Личная операция записана');return;
+  }
+  if (f.id==='debt-form'||f.classList.contains('studio-debt-form')){
     const fd = new FormData(f);
     run(async () => { S.data.debt = await Api.call('saveDebt', { d:{ owner:fd.get('owner'), type:fd.get('type'), date:fd.get('date'), amount:fd.get('amount'), note:fd.get('note') } }); render(); }, 'Записано');
     return;
@@ -4468,8 +4743,8 @@ root.addEventListener('submit', e => {
   if (f.classList.contains('fin-add')){
     const kind = f.dataset.kind; const fd = Object.fromEntries(new FormData(f).entries());
     if (!(Number(fd.amount)>0)){ toast('Укажите сумму.', true); return; }
-    const item = { id:uid('f'), ...fd, amount:Number(fd.amount) };
-    run(async () => { await saveFin({ [kind]: [...(finMonthData()[kind]||[]), item] }); render(); }, 'Добавлено');
+    const item = { ...fd, amount:Number(fd.amount) };const requestId=uid('expense');
+    run(async () => { S.data.finance=await Api.call('saveFinanceItem',{month:S.finMonth,kind,item,requestId});render(); }, 'Добавлено');
   }
 });
 
@@ -4513,7 +4788,7 @@ if (CONFIG.MODE==='gas'){
    Работают в панели, открытой с отдельного адреса (app.sukhaprana.ru) и установленной на экран «Домой».
    На странице Тильды пуши не включаются — там остаётся Telegram. */
 const Push = {
-  FB_VER: '10.12.2',
+  FB_VER: '13.2.0',
   ready(){ return CONFIG.MODE==='gas' && CONFIG.FIREBASE && CONFIG.VAPID_KEY && 'serviceWorker' in navigator && 'Notification' in window; },
   loadScript(src){ return new Promise((ok, bad) => { if (document.querySelector(`script[src="${src}"]`)) return ok(); const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = () => bad(new Error('Не удалось загрузить '+src)); document.head.appendChild(el); }); },
   async enable(){
@@ -4536,6 +4811,7 @@ const Push = {
 
 /* Старт */
 (async function start(){
+  if(CONFIG.MODE==='gas' && (window.location?.protocol!=='https:' || window.isSecureContext===false)){root.innerHTML='<div class="card"><h2>Требуется защищённое соединение</h2><p>Откройте панель по HTTPS с действительным сертификатом. Обратитесь к владельцу для проверки DNS и сертификата сайта.</p></div>';return;}
   if (Api.token){ try { await loadAll(); return; } catch(e){ if (e.code==='AUTH'){ Api.token=''; tokenStore.del('sp_token'); } else { S.bootError = e.message; } } }
   render();
 })();
@@ -4544,7 +4820,7 @@ const Push = {
    Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
 if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
   S, Api, Auth, loadAll, render, buildAppHtml, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
-  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin },
+  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') },
   modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal(), shifts:shiftsModal, notifyset:notifySetModal },
   computeNotifications, shiftStatus, durStr,
   parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
