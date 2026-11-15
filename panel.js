@@ -3631,7 +3631,7 @@ function viewSched(){
       ${sums.map(r => `<tr><td><span style="display:inline-flex;gap:8px;align-items:center">${ava(r.a.id,true)}<b>${esc(r.a.name)}</b></span></td>
         <td><span class="emp-bar" title="${String(r.n).replace('.',',')} смен"><i style="width:${Math.round(r.n/maxN*100)}%;background:${esc(r.a.color||'#C9BFE8')}"></i></span></td>
         <td class="r">${String(r.n).replace('.',',')}</td><td class="r">${r.halves||'—'}</td><td class="r">${Math.round(r.hours)}</td>${can?`<td class="r"><b>${money(r.pay)}</b></td>`:''}</tr>`).join('')}
-    </tbody></table></div>${can?'<p class="small muted">На смену можно ставить администраторов, управляющего и владельцев; одновременно — только один человек. Оплата смен попадает в «Продажи и зарплата» автоматически, смены владельцев не оплачиваются.</p>':''}</div></div>`;
+    </tbody></table></div>${can?'<p class="small muted">На смену можно ставить администраторов, управляющего и владельцев; одновременно — только один человек. Оплата смен попадает в «Продажи и зарплата» автоматически, включая смены владельцев с совмещением администратора.</p>':''}</div></div>`;
 }
 function shiftsModal(m){
   const rates = { ...DEFAULT_RATES, ...((S.data.settings||{}).shiftRates||{}) };
