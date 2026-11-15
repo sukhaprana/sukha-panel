@@ -1,4 +1,11 @@
 /* SUKHA PRANA · ОФОРМЛЕНИЕ ПАНЕЛИ. Собрано из panel.src.html — подписи блоков внутри. */
+.birthday-row { display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,220px) auto;gap:12px;align-items:center;padding:14px 0;border-bottom:1px solid var(--border); }
+.birthday-row:last-child { border-bottom:0; }
+.birthday-row label span { display:block; }
+.birthday-settings { display:flex;gap:12px;align-items:center;flex-wrap:wrap; }
+.birthday-settings input[type=number] { width:90px; }
+#finance-marketing,#finance-utilities { min-width:0;scroll-margin-top:24px; }
+@media(max-width:600px) { .birthday-row { grid-template-columns:minmax(0,1fr) auto; } .birthday-row label { grid-column:1/-1; } }
 /* ════════════════════════════════════════════════════════════════════════
    ОФОРМЛЕНИЕ ПАНЕЛИ (CSS)
    Все правила начинаются с #sp-app — поэтому стили панели не ломают сайт на Тильде,
