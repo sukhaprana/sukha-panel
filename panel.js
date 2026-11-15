@@ -24,8 +24,8 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 /* ВЕРСИЯ СБОРКИ ПАНЕЛИ. Показывается на экране входа и в профиле; сервер сверяет её
    при каждом обновлении данных (bootstrap.build) и подсказывает, какая из сторон устарела.
    При публикации новой версии: увеличьте BUILD здесь, CORE_BUILD (общий с сервером) и ?v=… в index.html. */
-const BUILD = 7;
-const BUILD_NAME = 'v7 · 8 ноября 2026';
+const BUILD = 8;
+const BUILD_NAME = 'v8 · 15 ноября 2026';
 
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 1 · НАСТРОЙКИ (CONFIG)
@@ -57,7 +57,7 @@ const CONFIG = Object.assign({
 /*@CORE-START — отсюда и до @CORE-END код общий для браузера и Google Apps Script */
 /* Версия данных/протокола: панель и сервер сверяют её, чтобы подсказать, что нужно обновить.
    panel.js BUILD == Code.gs CORE_BUILD в одной поставке. */
-const CORE_BUILD = 7;
+const CORE_BUILD = 8;
 /* ════════════════════════════════════════════════════════════════════════
    БЛОК 2 · УТИЛИТЫ
    Что делает:   даты, деньги, экранирование текста — мелкие помощники для всего кода.
@@ -225,8 +225,30 @@ const payoutMonth = p => (p.periodFrom || p.plannedDate || p.createdAt || '').sl
    shiftEveAt — в какое время накануне напомнить о завтрашней смене ('' — выключено). */
 function defaultNotify(role){
   return { push:true, telegram:false, tgChat:'', remindMin:60, quietFrom:'22:00', quietTo:'08:00', offDays:[], offDates:[], onlyShifts: role==='admin',
-    shiftRemindMin:60, shiftEveAt:'19:00',
-    types:{ assigned:true, deadline:true, overdue:true, comments:true, schedule:true, report:true, signup: role==='owner', payout:true } };
+    shiftRemindMin:60, shiftEveAt:'19:00', birthdayDays:7,
+    types:{ assigned:true, deadline:true, overdue:true, comments:true, schedule:true, report:true, signup: role==='owner', payout:true, birthday:role==='owner'||role==='manager' } };
+}
+/* Дни рождения — без возраста в уведомлении. 29 февраля в невисокосный год
+   отмечаем 28 февраля. UTC-разница дат не зависит от перехода на летнее время. */
+const canManageBirthdays = u => isOwner(u)||isManager(u);
+const validBirthday = value => value==='' || (validDate(value)&&value>='1900-01-01'&&value<=todayStr());
+/* Тренеры без отдельного входа тоже сотрудники; совмещения не дублируем. */
+function birthdayStaff(db){
+  return [...(db.users||[]).map(u=>({...u,personKind:'user',recordId:u.id})),...(db.trainers||[]).filter(t=>!t.userId).map(t=>({...t,id:'trainer:'+t.id,recordId:t.id,personKind:'trainer',role:'trainer',status:t.active===false?'inactive':'active',active:t.active!==false}))];
+}
+function birthdayReminders(users, viewer, settings={}, today=todayStr(), scheduledOnly=false){
+  if(!canManageBirthdays(viewer)||settings.types?.birthday===false) return [];
+  const lead=Number.isInteger(Number(settings.birthdayDays))?Math.max(0,Math.min(60,Number(settings.birthdayDays))):7;
+  const year=Number(today.slice(0,4));
+  const utc=s=>Date.UTC(Number(s.slice(0,4)),Number(s.slice(5,7))-1,Number(s.slice(8,10)));
+  return users.filter(u=>u.active&&u.status==='active'&&validBirthday(u.birthDate)&&u.birthDate).flatMap(u=>{
+    const month=Number(u.birthDate.slice(5,7)),day=Number(u.birthDate.slice(8,10));
+    const atYear=y=>`${y}-${pad(month)}-${pad(Math.min(day,new Date(y,month,0).getDate()))}`;
+    let date=atYear(year);if(date<today) date=atYear(year+1);
+    const days=Math.round((utc(date)-utc(today))/864e5);
+    if(days>lead||(scheduledOnly&&days!==lead&&days!==0)) return [];
+    return [{id:`bd-${u.id}-${date}-${days===0?'today':'ahead'+lead}`,date,days,at:(days===0?date:addDays(date,-lead))+'T09:00:00',icon:'🎂',title:days===0?'Сегодня день рождения':'Скоро день рождения',text:`${u.fullName||u.name} · ${fmtDayShort(date)}${days?' · через '+days+' дн.':''}`,view:'birthdays'}];
+  });
 }
 const RECEIPT_PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360" viewBox="0 0 240 360"><rect width="240" height="360" fill="#fffdf6"/><g fill="#9a9a9a" font-family="monospace" font-size="13"><text x="24" y="40">SUKHA PRANA</text><text x="24" y="64">КАССОВЫЙ ЧЕК</text><text x="24" y="100">Отчёт о закрытии смены</text><text x="24" y="130">Безнал ......... 25960</text><text x="24" y="152">Наличные ........... 0</text><text x="24" y="190">ИТОГ ........... 25960</text><text x="24" y="320">(пример фото чека)</text></g><path d="M24 210h192M24 220h150M24 230h170M24 240h120" stroke="#ccc" stroke-width="4"/></svg>');
 
@@ -630,8 +652,8 @@ function createServer(opts){
   const event = (type, data) => { try { opts.onEvent && opts.onEvent(type, data, db); } catch(e){} };
   const err = (msg, code) => { const e = new Error(msg); e.code = code || 'FORBIDDEN'; throw e; };
   const me = token => { const id = opts.userIdByToken ? opts.userIdByToken(token, db) : token; const u = id && db.users.find(x => x.id===id && x.active && x.status==='active'); if(!u) err('Сессия истекла. Войдите снова.','AUTH'); return u; };
-  const pubUser = (u, full) => ({ id:u.id, name:u.name, fullName:u.fullName, role:u.role, extraRoles:u.extraRoles||[], color:u.color, avatar:u.avatar||'', active:u.active, status:u.status,
-    ...(full ? { login:u.login, phone:u.phone, email:u.email, createdAt:u.createdAt } : {}) });
+  const pubUser = (u, full, birthday=false) => ({ id:u.id, name:u.name, fullName:u.fullName, role:u.role, extraRoles:u.extraRoles||[], color:u.color, avatar:u.avatar||'', active:u.active, status:u.status,
+    ...(full ? { login:u.login, phone:u.phone, email:u.email, createdAt:u.createdAt } : {}),...(full||birthday?{birthDate:u.birthDate||''}:{}) });
   const normPhone = s => String(s||'').replace(/\D/g,'').replace(/^8/,'7');
 
   function generateRecurring(){
@@ -926,11 +948,11 @@ function createServer(opts){
         users: db.users.filter(x => {
           if (owner) return x.status !== 'rejected'; // владелец видит всех кроме отклонённых (включая отключённых)
           return x.active && x.status === 'active'; // остальные — только активных
-        }).map(x => pubUser(x, owner)),
-        trainers: db.trainers,
+        }).map(x => pubUser(x, owner, canManageBirthdays(u))),
+        trainers: db.trainers.map(({birthDate,...trainer})=>canManageBirthdays(u)?{...trainer,birthDate:birthDate||''}:trainer),
         contacts: db.contacts || [],
         ...(Rules.canUseInventory(u) ? { inventory:(db.inventory||[]).map(({ photo, ...item }) => ({ ...item, hasPhoto:!!photo })) } : {}),
-        capabilities:['inventory-v1','finance-v2','task-files-v1'],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
+        capabilities:['inventory-v1','finance-v2','task-files-v1','birthdays-v1'],   /* важные контакты видны всем ролям (редактирование — по Rules.canEditContacts) */
         build: CORE_BUILD,            /* версия сервера: панель сверяет со своей и подсказывает, кому пора обновиться */
         tasks: db.tasks.filter(t => Rules.canSeeTask(u,t)),
         templates: db.templates.filter(t => levels.includes(t.level)),
@@ -1153,7 +1175,8 @@ function createServer(opts){
       if (newPass && (String(newPass).length < 12 || String(newPass).length>1024)) err('Пароль — минимум 12 символов.','VALIDATION');
       /* Безопасность: берём только разрешённые поля — служебные (salt, passHash, notify и т.п.) через сохранение сотрудника не меняются.
          Статус заявки меняется только через approveUser/rejectUser, где чистятся уведомления. */
-      const ALLOWED_USER_FIELDS = ['fullName','phone','email','login','role','extraRoles','active','color','avatar'];
+      if('birthDate' in user&&!validBirthday(user.birthDate)) err('Проверьте дату рождения.','VALIDATION');
+      const ALLOWED_USER_FIELDS = ['fullName','phone','email','login','role','extraRoles','active','color','avatar','birthDate'];
       const clean = {}; ALLOWED_USER_FIELDS.forEach(k => { if (k in rest) clean[k] = rest[k]; });
       const next = { ...old, ...clean }; if (newPass) setPass(next, newPass);
       if (opts.dropAllFor && (newPass || clean.active===false || 'role' in clean || 'extraRoles' in clean)) opts.dropAllFor(old.id, db);
@@ -1169,11 +1192,21 @@ function createServer(opts){
           if (byName){ byName.userId = next.id; linked = [byName]; }
           else { const rec = { id:uid('tr'), userId:next.id, fullName:next.fullName, name:shortName(next.fullName), phone:next.phone||'', note:'сотрудник студии', active:true }; db.trainers.push(rec); linked = [rec]; }
         }
+        /* При связывании внешнего тренера с аккаунтом дата не должна исчезнуть. */
+        if(!next.birthDate&&!('birthDate' in clean)){const source=linked.find(t=>t.birthDate&&validBirthday(t.birthDate));if(source) next.birthDate=source.birthDate;}
         linked.forEach(t => { t.fullName = next.fullName; t.name = shortName(next.fullName); t.active = next.active!==false && next.status==='active'; });
       } else {
         linked.forEach(t => { t.active = false; }); /* сняли совмещение — из «Тренеров» человек уходит, история начислений остаётся */
       }
       db.users[i] = next; save(); return pubUser(next, true);
+    },
+    saveBirthday({id,birthDate,kind='user'},u){
+      if(!canManageBirthdays(u)) err('Дни рождения редактируют владельцы и управляющий.');
+      if(!['user','trainer'].includes(kind)) err('Неизвестный тип сотрудника.','VALIDATION');
+      if(!validBirthday(birthDate)) err('Проверьте дату рождения.','VALIDATION');
+      const person=(kind==='trainer'?db.trainers:db.users).find(x=>x.id===id&&x.status!=='rejected');if(!person) err('Сотрудник не найден.','NOT_FOUND');
+      if(kind==='trainer'&&person.userId) err('Укажите дату в записи связанного сотрудника.','VALIDATION');
+      person.birthDate=birthDate;save();return {id:person.id,kind,birthDate};
     },
     approveUser({ id, role }, u){
       if (!Rules.canManageTeam(u)) err('Подтверждать заявки может только владелец.');
@@ -1195,7 +1228,7 @@ function createServer(opts){
       /* сохраняем связь с сотрудником (совмещение «тренер»), если она есть */
       const prev = db.trainers.find(x => x.id===t.id);
       if(t.id&&!prev) err('Тренер не найден.','NOT_FOUND');
-      const rec = upsert(db.trainers, { ...(prev?.userId ? { userId: prev.userId } : {}), active:t.active!==false, phone:String(t.phone||'').slice(0,32), note:String(t.note||'').slice(0,2000), id:prev?.id || uid('tr'), name:t.fullName.trim().slice(0,200), fullName:t.fullName.trim().slice(0,200) });
+      const rec = upsert(db.trainers, { ...(prev?.userId ? { userId: prev.userId } : {}), active:t.active!==false, birthDate:prev?.birthDate||'', phone:String(t.phone||'').slice(0,32), note:String(t.note||'').slice(0,2000), id:prev?.id || uid('tr'), name:t.fullName.trim().slice(0,200), fullName:t.fullName.trim().slice(0,200) });
       save(); return rec;
     },
     /* График: заменить все смены на дату (редактируют управляющий и владельцы) */
@@ -1331,7 +1364,7 @@ function createServer(opts){
       if (!isOwner(u) && kind==='staff' && p.rate.mode==='fixed') err('Управляющий не переключает админов на «фикс в месяц» — это делает владелец.','FORBIDDEN');
       db.rates[kind] = db.rates[kind] || {};
       list.forEach(id => {
-        if (kind==='staff'){ const t = db.users.find(x => x.id===id); if (!t || isOwner(t)) return; /* админ-ставки — только не владельцам */
+        if (kind==='staff'){ const t = db.users.find(x => x.id===id); if (!t || (!isOwner(u)&&isOwner(t))) return; /* ставку владельца с совмещением меняет только владелец */
           db.rates.staff[id] = { ...(db.rates.staff[id]||{}), mode:p.rate.mode, amount:p.rate.amount||0 };
         } else db.rates[kind][id] = { ...(db.rates[kind][id]||{}), ...p.rate };
       });
@@ -1387,6 +1420,7 @@ function createServer(opts){
     /* Владелец добавляет сотрудника вручную — доступ открыт сразу */
     addUser({ user }, u){
       if (!Rules.canManageTeam(u)) err('Добавлять сотрудников может только владелец.');
+      if('birthDate' in user&&!validBirthday(user.birthDate)) err('Проверьте дату рождения.','VALIDATION');
       const fullName = String(user.fullName||'').trim().replace(/\s+/g,' '); const email = String(user.email||'').trim().toLowerCase(); const login = String(user.login||email||'').trim().toLowerCase();
       if(fullName.length>160||email.length>254||String(user.phone||'').length>32) err('Слишком длинное ФИО, email или телефон.', 'VALIDATION');
       if(db.users.length>=500||db.users.filter(x=>x.status==='pending').length>=100) err('Лимит заявок. Обратитесь к владельцу.', 'LIMIT');
@@ -1398,7 +1432,7 @@ function createServer(opts){
       if (user.phone && db.users.some(x => normPhone(x.phone) && normPhone(x.phone)===normPhone(user.phone))) err('Такой телефон уже есть.','VALIDATION');
       const palette = ['#899C84','#CCC1FF','#EBCB8B','#9FC3BE','#E8B4C4','#B9C7A6','#D6CBB5'];
       const nu = { id:uid('u'), name:shortName(fullName), fullName, login, email, phone:String(user.phone||'').trim(), role:user.role, extraRoles:(user.extraRoles||[]).filter(r => ROLES[r] && r!==user.role),
-        color:palette[db.users.length % palette.length], avatar: AVATARS.includes(user.avatar) ? user.avatar : '', active:true, status:'active', createdAt:nowIso(), approvedBy:u.id, notify:defaultNotify(user.role) };
+        color:palette[db.users.length % palette.length], avatar: AVATARS.includes(user.avatar) ? user.avatar : '', active:true, status:'active', createdAt:nowIso(), approvedBy:u.id, birthDate:user.birthDate||'', notify:defaultNotify(user.role) };
       setPass(nu, user.pass); db.users.push(nu); save(); return pubUser(nu, true);
     },
     saveNotify({ notify }, u){
@@ -1413,6 +1447,7 @@ function createServer(opts){
       if ('push' in src) clean.push = !!src.push;
       if ('telegram' in src) clean.telegram = !!src.telegram;
       if ('remindMin' in src) clean.remindMin = num(src.remindMin, base.remindMin, 5, 1440);
+      if ('birthdayDays' in src){if(!canManageBirthdays(u)) err('Настройка доступна владельцам и управляющему.');const n=Number(src.birthdayDays);if(!Number.isInteger(n)||n<0||n>60) err('Напоминание — от 0 до 60 дней.','VALIDATION');clean.birthdayDays=n;}
       if ('shiftRemindMin' in src) clean.shiftRemindMin = num(src.shiftRemindMin, base.shiftRemindMin ?? 60, 0, 720);
       if ('shiftEveAt' in src) clean.shiftEveAt = src.shiftEveAt === '' ? '' : (hhmm(src.shiftEveAt) || base.shiftEveAt || '19:00');
       if ('quietFrom' in src) clean.quietFrom = hhmm(src.quietFrom) || '22:00';
@@ -1421,7 +1456,7 @@ function createServer(opts){
       if ('offDates' in src) clean.offDates = [...new Set((Array.isArray(src.offDates) ? src.offDates : []).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))).map(String))].slice(0,60);
       if ('onlyShifts' in src) clean.onlyShifts = !!src.onlyShifts;
       if ('tgChat' in src) clean.tgChat = String(src.tgChat||'').slice(0,60);
-      if (src.types && typeof src.types==='object'){ const ty = { ...base.types }; ['assigned','deadline','overdue','comments','schedule','report','signup','payout'].forEach(k => { if (k in src.types) ty[k] = !!src.types[k]; }); clean.types = ty; }
+      if (src.types && typeof src.types==='object'){ const ty = { ...base.types }; ['assigned','deadline','overdue','comments','schedule','report','signup','payout','birthday'].forEach(k => { if (k in src.types) ty[k] = !!src.types[k]; }); clean.types = ty; }
       x.notify = clean;
       if ('tgChat' in src && String(clean.tgChat||'').replace('@','').toLowerCase() !== String(prev.tgChat||'').replace('@','').toLowerCase()) delete x.notify.tgChatId;
       save(); return x.notify;
@@ -1494,6 +1529,8 @@ function createServer(opts){
     },
     savePayroll({ month, adminId, data }, u){
       payrollOnly(u);
+      const target=db.users.find(x=>x.id===adminId);
+      if(!isOwner(u)&&target&&(isOwner(target)||isManager(target))) err('Зарплату владельцев и управляющих меняет только владелец.');
       if ('manual' in data && !isOwner(u)) err('Сумму вручную задаёт владелец.');
       if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||'')||!db.users.some(x=>x.id===adminId)) err('Проверьте месяц и сотрудника.','VALIDATION');
       /* Не сохраняем тело запроса целиком: только поля расчёта зарплаты. */
@@ -1669,7 +1706,8 @@ const safeLS = {
   set(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
   del(k){ try { localStorage.removeItem(k); } catch(e){} }
 };
-/* Хранилище демовхода — до закрытия вкладки. Рабочий токен теперь только в памяти (см. tokenStore). */
+/* Хранилище вкладки: переживает перезагрузку, очищается при закрытии вкладки.
+   Срок и отзыв рабочей сессии в любом случае проверяет сервер. */
 const safeSS = {
   get(k){ try { return sessionStorage.getItem(k); } catch(e){ return null; } },
   set(k,v){ try { sessionStorage.setItem(k,v); } catch(e){} },
@@ -1688,10 +1726,11 @@ const DemoServer = createServer({
   delay: 60
 });
 
-/* Рабочий токен только в памяти: перезагрузка требует входа. Не оставляем старые ключи. */
-if (CONFIG.MODE==='gas') {safeLS.del('sp_token');safeSS.del('sp_token');}
+/* Не сохраняем рабочий токен в localStorage. sessionStorage не продлевает
+   абсолютный срок сессии (8 часов) и не отменяет её отзыв после смены пароля. */
+if (CONFIG.MODE==='gas') safeLS.del('sp_token');
 let sessionToken='';
-const tokenStore = CONFIG.MODE==='gas' ? {get:()=>sessionToken,set:(_,v)=>{sessionToken=v;},del:()=>{sessionToken='';}} : safeSS;
+const tokenStore = CONFIG.MODE==='gas' ? {get:k=>safeSS.get(k)||sessionToken,set:(k,v)=>{sessionToken=v;safeSS.set(k,v);},del:k=>{sessionToken='';safeSS.del(k);}} : safeSS;
 
 /* --- Api: единая точка входа. Для Google Apps Script меняется только CONFIG --- */
 const Api = {
@@ -1795,8 +1834,9 @@ function statsPeople(){
 function dayBuckets(date){
   const list = visibleTasks(), T = todayStr();
   const sortT = (a,b) => mineRank(a)-mineRank(b) || (a.dueTime||'').localeCompare(b.dueTime||'') || PRIO_W[b.priority]-PRIO_W[a.priority];
-  const recurring = list.filter(t => t.recurringId && t.due===date).sort(sortT);
-  const dueToday = list.filter(t => !t.recurringId && t.due===date).sort(sortT);
+  /* Выполненное остаётся в истории и статистике, но не в рабочем списке. */
+  const recurring = list.filter(t => t.recurringId && t.due===date && isOpen(t)).sort(sortT);
+  const dueToday = list.filter(t => !t.recurringId && t.due===date && isOpen(t)).sort(sortT);
   // Перенос: всё незакрытое с прошлых дней показываем на сегодняшнем чек-листе
   const carried = date===T ? list.filter(t => isOpen(t) && t.due < T).sort((a,b) => mineRank(a)-mineRank(b) || dueDate(a)-dueDate(b)) : [];
   const ongoing = list.filter(t => !t.recurringId && isOpen(t) && t.start<=date && t.due>date).sort((a,b) => mineRank(a)-mineRank(b) || a.due.localeCompare(b.due) || PRIO_W[b.priority]-PRIO_W[a.priority]);
@@ -1847,8 +1887,9 @@ function getTabsList(){
     ['day','Чек-лист дня', over], ...(isPureSmm(S.user) ? [] : [['sched','График'], ['rep','Отчёт смены']]), ['cal','Календарь'], ...(isPureSmm(S.user) ? [] : [['stats','Статистика']]), ['pay','Выплаты'], ...(isPureSmm(S.user) ? [] : [['rev','Отзывы']]), ['guide','Гайд'], ['contacts','Контакты'],
     ...(Rules.canUseInventory(S.user) ? [['inventory','Расходники и товары']] : []),
     ...(Rules.canSeePayroll(S.user) ? [['sal','Продажи и зарплата']] : []),
-    ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы'],['marketing','Маркетинг и реклама'],['utilities','Коммуналка и сервисы']] : []),
-    ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : [])
+    ...(Rules.canSeeFinance(S.user) ? [['fin','Финансы']] : []),
+    ...(Rules.canManageTeam(S.user) ? [['team','Команда', pend]] : []),
+    ...(canManageBirthdays(S.user) ? [['birthdays','Дни рождения']] : [])
   ];
 }
 
@@ -1860,9 +1901,9 @@ function getTabsList(){
 const NAV_GROUPS = [
   { k:'work',  label:'Работа',     tabs:['day','sched','rep','cal'] },
   { k:'pulse', label:'Показатели', tabs:['stats','rev'] },
-  { k:'money', label:'Деньги',     tabs:['pay','sal','fin','marketing','utilities'] },
+  { k:'money', label:'Деньги',     tabs:['pay','sal','fin'] },
   { k:'know',  label:'База',       tabs:['guide','contacts','inventory'] },   /* знания студии + важные контакты */
-  { k:'team',  label:'Команда',    tabs:['team'] }
+  { k:'team',  label:'Команда',    tabs:['team','birthdays'] }
 ];
 /* Собираем группы из видимых вкладок (используется и мобильной шторкой «Ещё») */
 function getNavGroups(){
@@ -1973,7 +2014,7 @@ function switchTab(targetView){
 
     updateBannersState();
 
-    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') };
+    const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, birthdays:viewBirthdays };
     if (views[S.view]) {
       mainEl.innerHTML = views[S.view]();
     }
@@ -2000,7 +2041,7 @@ function buildAppHtml(){
   const over = allOverdue().length; const pend = Rules.canManageTeam(S.user) ? pendingUsers().length : 0;
   const tabs = getTabsList();
   if (!tabs.some(t => t[0]===S.view)) S.view = 'day';
-  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') };
+  const views = { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, birthdays:viewBirthdays };
   const unread = unreadCount();
   return `
     <header class="top">
@@ -2119,6 +2160,7 @@ function viewLogin(){
       <div class="field"><label for="lg-pass">Пароль</label><input class="input" id="lg-pass" name="password" type="password" autocomplete="current-password" required value="${S.loginPick?'1234':''}"></div>
       <div id="lg-err" class="small" style="color:var(--st-over);min-height:1em" role="alert"></div>
       <button class="btn primary" type="submit" id="lg-btn">Войти</button>
+      <p class="small muted">Вход сохраняется при обновлении этой вкладки до 8 часов. Для быстрого входа после закрытия используйте автозаполнение менеджера паролей телефона — с Face ID или отпечатком, если устройство это поддерживает.</p>
       <button class="btn ghost" type="button" data-act="auth-mode" data-m="forgot">Забыли пароль?</button>
       <button class="btn ghost" type="button" data-act="auth-mode" data-m="register">Нет доступа? Зарегистрироваться</button>
       ${demo}
@@ -2992,6 +3034,18 @@ function tplModal(tp){
     <div class="field"><label for="rp-p">Приоритет</label><select class="input" id="rp-p">${Object.entries(PRIO).map(([k,v])=>`<option value="${k}"${(tp.priority||'mid')===k?' selected':''}>${v}</option>`).join('')}</select></div></div>
     <div class="modal-f">${tp.id?`<button type="button" class="btn danger" data-act="tpl-del" data-id="${tp.id}">Удалить</button>`:''}<span class="spacer"></span><button type="button" class="btn" data-act="tpls">Назад</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
 }
+/* Отдельные права на дни рождения позволяют управляющему вести даты,
+   не открывая ему изменение ролей, паролей и доступа сотрудников. */
+function viewBirthdays(){
+  if(!canManageBirthdays(S.user)) return '<p>Доступ только владельцам и управляющему.</p>';
+  if(!(S.data.capabilities||[]).includes('birthdays-v1')) return '<div class="card">Для дней рождения требуется сервер v8. Обновите существующее развертывание Code.gs.</div>';
+  const st=S.data.notify||{},enabled=st.types?.birthday!==false;
+  const people=birthdayStaff(S.data).filter(u=>u.active&&u.status==='active').sort((a,b)=>(a.fullName||a.name).localeCompare(b.fullName||b.name,'ru'));
+  return `<div class="section"><div class="toolbar"><h2>Дни рождения сотрудников</h2></div>
+    <div class="card"><p class="small muted">Даты видят и редактируют владельцы и управляющий. Напоминания появляются в колокольчике и приходят в подключённые Telegram/пуш с учётом тихих часов. Возраст в уведомлениях не указывается.</p>
+    <form id="birthday-settings" class="birthday-settings"><label class="sw"><input type="checkbox" id="birthday-enabled"${enabled?' checked':''}><span>Напоминать мне</span></label><label for="birthday-days">За сколько дней</label><input class="input" id="birthday-days" type="number" min="0" max="60" step="1" value="${st.birthdayDays??7}" required><button class="btn primary" type="submit">Сохранить напоминания</button></form><p class="small muted">0 — только в день рождения; максимум 60 дней. В сам день придёт отдельное напоминание. Для 29 февраля в невисокосный год используется 28 февраля.</p></div>
+    <div class="card birthday-list">${people.map(u=>`<form class="birthday-row" data-birthday="${esc(u.recordId)}" data-person-kind="${u.personKind}"><label for="bd-${esc(u.id)}"><b>${esc(u.fullName||u.name)}</b><span class="small muted">${esc(rolesOf(u).map(r=>ROLES[r]).join(' · '))}</span></label><input class="input" id="bd-${esc(u.id)}" name="birthDate" type="date" min="1900-01-01" max="${todayStr()}" value="${esc(u.birthDate||'')}" aria-label="Дата рождения ${esc(u.fullName||u.name)}"><button class="btn sm" type="submit">Сохранить</button></form>`).join('')||'<p>Сотрудников пока нет.</p>'}</div></div>`;
+}
 function userModal(m){
   const u = userById(m.id) || {};
   return `<div class="overlay" data-act="close-bg"><form class="modal" id="user-form" data-id="${esc(m.id)}" style="max-width:520px"><div class="modal-h"><h3>Сотрудник</h3>${closeX}</div>
@@ -2999,6 +3053,7 @@ function userModal(m){
     <div class="field"><span class="small muted" style="font-weight:600">Аватар</span>${avatarPicker(u.avatar, 'set-avatar', u.id)}</div>
     <div class="grid2"><div class="field"><label for="uf-ph">Телефон</label><input class="input" id="uf-ph" type="tel" value="${esc(u.phone||'')}"></div>
     <div class="field"><label for="uf-em">Почта</label><input class="input" id="uf-em" type="email" value="${esc(u.email||'')}"></div></div>
+    <div class="field"><label for="uf-birth">Дата рождения</label><input class="input" id="uf-birth" type="date" min="1900-01-01" max="${todayStr()}" value="${esc(u.birthDate||'')}"></div>
     <div class="modal-f"><button type="button" class="btn" data-act="close">Отмена</button><button class="btn primary" type="submit">Сохранить</button></div></form></div>`;
 }
 function trainerModal(m){
@@ -3019,7 +3074,9 @@ const adminsList = () => S.data.users.filter(u => isAdminRole(u) && u.status==='
 const shiftStaff = () => S.data.users.filter(u => u.status==='active' && u.active && (isOwner(u) || isManager(u) || isAdminRole(u)));
 /* В расчёт зарплаты попадают администраторы и все, кроме владельцев, у кого есть смены в месяце */
 /* В расчёт по договору попадают администраторы (кроме владельцев). Свою зарплату управляющий здесь не видит */
-const payrollStaff = M => S.data.users.filter(u => u.status==='active' && u.active && !isOwner(u) && isAdminRole(u) && (isOwner(S.user) || !isManager(u)));
+/* Совмещение владельца/управляющего с администратором не исключает зарплату
+   за смены. Сохраняем в месяце и сотрудника, у которого роль уже изменена. */
+const payrollStaff = M => S.data.users.filter(u => u.status==='active' && u.active && (isOwner(S.user)||(!isOwner(u)&&!isManager(u))) && (isAdminRole(u) || (S.data.schedule||[]).some(s=>s.adminId===u.id&&s.date.slice(0,7)===M)));
 const salesOf = (month, sellerId) => (S.data.sales||[]).filter(s => s.date.slice(0,7)===month && (!sellerId || s.sellerId===sellerId));
 const isEmpty = v => v===undefined || v===null || v==='';
 
@@ -3136,7 +3193,7 @@ const presetDesc = p => { const K = PRESET_KINDS[p.kind]||{}; const m = (K.modes
 /* Кому применяется пресет: все активные сотрудники должности (отключённые не трогаем).
    Для тренеров — общий список: внешние тренеры + сотрудники с совмещением «тренер». */
 function presetTargets(kind){
-  if (kind==='staff') return activeStaff().filter(u => isAdminRole(u) && !isOwner(u)).map(u => u.id);
+  if (kind==='staff') return activeStaff().filter(u => isAdminRole(u) && (isOwner(S.user)||!isOwner(u))).map(u => u.id);
   if (kind==='trainers') return payPeople('tr').map(p => p.id);
   return payPeople(kind).map(p => p.id);
 }
@@ -3358,7 +3415,7 @@ function calcFinance(M){
   // ФОТ: одна сумма начисления на человека и должность — та же, что в «Продажи и зарплата». Выданное по журналу — для контроля
   const paid = {}; (S.data.payouts||[]).filter(p => p.issuedAt && payoutMonth(p)===M).forEach(p => { paid[p.recipient] = (paid[p.recipient]||0) + (Number(p.amount)||0); });
   const fotRows = [];
-  activeStaff().filter(u => !isOwner(u) && isAdminRole(u)).forEach(u => { const c = calcPayroll(M, u.id); fotRows.push({ key:'adm:'+u.id, pid:u.id, name:u.fullName||u.name, role:'Администратор', how: c.mode==='contract'?'по договору':c.mode==='shift'?'только смены':'фикс в месяц', sum:c.net, calc:c.calcNet ?? c.net, manual:c.manualSet ? c.net : null }); });
+  payrollStaff(M).forEach(u => { const c = calcPayroll(M, u.id); fotRows.push({ key:'adm:'+u.id, pid:u.id, name:u.fullName||u.name, role:'Администратор', how: c.mode==='contract'?'по договору':c.mode==='shift'?'только смены':'фикс в месяц', sum:c.net, calc:c.calcNet ?? c.net, manual:c.manualSet ? c.net : null }); });
   ['mgr','smm','tr'].forEach(kind => payPeople(kind).forEach(pp => { const a = payAccrual(M, `${kind}:${pp.id}`);
     fotRows.push({ key:a.key, pid:pp.id, name:pp.name, role:{ mgr:'Управляющий', smm:'СММ', tr:'Тренер' }[kind], how: PAY_KINDS[kind].modes[a.rate.mode] + (a.rate.amount ? ` · ${money(a.rate.amount)}` : ''), sum:a.sum, calc:a.calc, manual:a.manual, kind }); }));
   const byPerson = {}; fotRows.forEach(r => { byPerson[r.pid] = (byPerson[r.pid]||0) + r.sum; });
@@ -3422,14 +3479,6 @@ function personalDebtSection(){
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Операция</th><th class="r">Сумма</th><th class="r">Остаток</th><th>Кто внёс</th><th></th></tr></thead><tbody>${rows.map(x=>{running+=x.type==='borrow'?Number(x.amount):-Number(x.amount);return `<tr><td>${esc(x.date)}</td><td>${x.type==='borrow'?'Екатерина взяла у Владислава':'Екатерина вернула Владиславу'}<div class="small muted">${esc(x.note)}</div></td><td class="r">${money(x.amount)}</td><td class="r">${money(running)}</td><td>${esc(nameOf(x.createdBy))}<div class="small muted">${esc(fmtDT(x.createdAt))}</div></td><td><button type="button" class="btn ghost sm" data-act="personal-debt-delete" data-id="${esc(x.id)}">Удалить</button></td></tr>`;}).join('')||'<tr><td colspan="6" class="muted">Личных операций пока нет.</td></tr>'}</tbody></table></div>
     <form id="personal-debt-form" class="fin-add"><input type="hidden" name="debtor" value="${esc(debtor.id)}"><input type="hidden" name="creditor" value="${esc(creditor.id)}"><select class="input" name="type" aria-label="Операция личного долга"><option value="borrow">Екатерина взяла у Владислава</option><option value="repay">Екатерина вернула Владиславу</option></select><input class="input" name="date" type="date" value="${todayStr()}" required aria-label="Дата личной операции"><input class="input" name="amount" type="number" min="0.01" step="0.01" max="1000000000" required placeholder="Сумма, ₽" aria-label="Сумма личной операции"><input class="input" name="note" maxlength="500" placeholder="Комментарий" aria-label="Комментарий личной операции"><button class="btn primary sm" type="submit">Записать</button></form></section>`;
 }
-function viewExpenseTab(kind){
-  if(!Rules.canSeeFinance(S.user)) return '<p>Доступ только владельцам.</p>';
-  if(!(S.data.capabilities||[]).includes('finance-v2')) return serverFinanceNotice();
-  const title=kind==='marketing'?'Маркетинг и реклама':'Коммуналка и сервисы';
-  if(!(S.data.finance||{})[S.finMonth]) { viewFin();return '<p class="muted">Загружаю расходы…</p>'; }
-  return `<div class="toolbar"><h2>${title}</h2><span class="spacer"></span><label for="f-finmonth">Месяц</label><input class="input" type="month" id="f-finmonth" value="${S.finMonth}"><button type="button" class="btn" data-act="view" data-v="fin">Общие финансы</button></div><p class="small muted">Расходы за ${monthName(S.finMonth).toLowerCase()} входят в общий финансовый результат студии.</p>${finList(kind,title,finMonthData()[kind]||[],kind==='utilities'?'Регулярные сервисы переносятся в следующий месяц автоматически.':'Добавьте размещение, площадку или рекламную кампанию. В новый месяц список автоматически не копируется.',true)}`;
-}
-
 function serverFinanceNotice(){return '<div class="card"><h3>Требуется обновление сервера</h3><p>Этот раздел использует сервер v7. Замените Code.gs и опубликуйте новую версию существующего развертывания Apps Script, затем обновите страницу. Адрес API_URL должен остаться прежним.</p></div>';}
 function viewFin(){
   if(!(S.data.capabilities||[]).includes('finance-v2')) return serverFinanceNotice();
@@ -3466,8 +3515,8 @@ function viewFin(){
       ${c.fixed.filter(x=>x.k!=='marketing').map(expRow).join('')}
       <tr><td colspan="4"><form class="fin-add" id="cfg-add-expenses"><input class="input" name="name" placeholder="Новая статья расхода" required aria-label="Название"><input class="input num" name="def" type="number" min="0" step="100" placeholder="Сумма по умолчанию" aria-label="Сумма по умолчанию"><button class="btn sm primary" type="submit">+ Добавить</button></form></td></tr>
       <tr><td>Затраты на расходники<div class="small muted">список ниже</div></td><td></td><td class="r" colspan="2"><b>${money(c.purchasesTotal)}</b></td></tr>
-      <tr><td><button type="button" class="btn ghost sm" data-act="view" data-v="marketing">Маркетинг и реклама →</button></td><td></td><td class="r" colspan="2"><b>${money(c.marketingTotal)}</b></td></tr>
-      <tr><td><button type="button" class="btn ghost sm" data-act="view" data-v="utilities">Коммуналка и сервисы →</button></td><td></td><td class="r" colspan="2"><b>${money(c.utilitiesTotal)}</b></td></tr>
+      <tr><td><a class="btn ghost sm" href="#finance-marketing">Маркетинг и реклама ↓</a></td><td></td><td class="r" colspan="2"><b>${money(c.marketingTotal)}</b></td></tr>
+      <tr><td><a class="btn ghost sm" href="#finance-utilities">Коммуналка и сервисы ↓</a></td><td></td><td class="r" colspan="2"><b>${money(c.utilitiesTotal)}</b></td></tr>
       <tr><td>Затраты собственников</td><td></td><td class="r" colspan="2"><b>${money(c.customTotal)}</b></td></tr>
       <tr><td>Налоги и банк<div class="small muted">% от доходов</div></td><td class="r"><span class="pct-in"><input class="input num" type="number" min="0" max="30" step="0.1" data-fin="taxRate" value="${c.f.taxRate}" aria-label="Процент налогов и банка">%</span></td><td class="r" colspan="2"><b>${money(c.tax)}</b></td></tr>
       <tr class="sum"><td>Итого расходов</td><td></td><td class="r" colspan="2">${money(c.expensesTotal)}</td></tr></tbody></table></div>
@@ -3493,6 +3542,8 @@ function viewFin(){
       <label class="small muted" for="f-finmonth">Месяц</label><input class="input pill" type="month" id="f-finmonth" value="${M}"></div>
     <div class="bigkpis">${tile('Доходы', c.incomeTotal, monthName(M))}${tile('Расходы', c.expensesTotal, 'вкл. зарплаты и налоги')}${tile(c.profit>=0?'Прибыль':'Убыток', c.profit, 'доходы − расходы', c.profit>=0?'var(--st-done)':'var(--st-over)')}${tile('Долг студии', c.debtBal, 'перед собственниками', c.debtBal>0?'var(--st-over)':'')}</div>
     <div class="fin-grid"><div class="fin-col">${incomeCard}${resCard}${ownerOpsCard}</div><div class="fin-col">${expCard}</div></div>
+    <div class="fin-grid"><section id="finance-marketing">${finList('marketing','Маркетинг и реклама',c.f.marketing||[],'Рекламные расходы входят в результат выбранного месяца; автоматически не копируются.',true)}</section>
+      <section id="finance-utilities">${finList('utilities','Коммуналка и сервисы',c.f.utilities||[],'Регулярные сервисы переносятся в следующий месяц с новыми датами.',true)}</section></div>
     <div class="fin-grid three">${finList('purchases','Закупки товаров и расходников', c.f.purchases, 'Если платили из своих — выберите, кто.', true)}
       ${finList('custom','Затраты собственников', c.f.custom, 'Ваши личные траты на студию.', true)}</div>
     <div class="card">
@@ -3727,6 +3778,7 @@ function computeNotifications(){
   if (ty.signup && isOwner(S.user)) pendingUsers().forEach(u => out.push({ id:'su-'+u.id, at:u.createdAt, icon:'👤', title:'Заявка на доступ', text:`${u.fullName} — ${ROLES[u.role].toLowerCase()}`, view:'team', urgent:true }));
   if (ty.payout) (S.data.payouts||[]).filter(p => p.recipient===me && p.issuedAt && now - new Date(p.issuedAt).getTime() < 7*864e5)
     .forEach(p => out.push({ id:'po-'+p.id, at:p.issuedAt, icon:'✉️', title:'Конверт выдан', text:`${p.periodFrom?periodLabel(p.periodFrom,p.periodTo):p.period} — выдал(а) ${nameOf(p.issuedBy)}`, view:'pay' }));
+  out.push(...birthdayReminders(birthdayStaff(S.data),S.user,st,T));
   return out.sort((a,b) => String(b.at).localeCompare(String(a.at)));
 }
 const readKey = () => 'sp_notif_read_' + (S.user?.id||'');
@@ -3745,7 +3797,7 @@ function notifySetModal(){
   const onShift = isAdminRole(S.user) || isManager(S.user) || isOwner(S.user);   // может стоять в графике
   const TYPES = [['assigned','Мне поставили задачу'],['deadline','Скоро дедлайн моей задачи'],['overdue','Моя задача просрочена'],['comments','Комментарии к моим задачам'],
     ...(onShift?[['schedule','Напоминания о сменах (до начала и накануне)']]:[]), ['report', isOwner(S.user)||isManager(S.user) ? 'Отчёт смены не сдан' : 'Пора сдать отчёт смены'],
-    ...(isOwner(S.user)?[['signup','Новые заявки на доступ']]:[]), ['payout','Конверт с зарплатой выдан']];
+    ...(isOwner(S.user)?[['signup','Новые заявки на доступ']]:[]), ['payout','Конверт с зарплатой выдан'], ...(canManageBirthdays(S.user)?[['birthday','Дни рождения сотрудников']]:[])];
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone;
   return `<div class="overlay" data-act="close-bg"><form class="modal" id="notify-form" style="max-width:600px"><div class="modal-h"><h3>Мой профиль и уведомления</h3>${closeX}</div>
@@ -3758,7 +3810,8 @@ function notifySetModal(){
       <label class="sw"><input type="checkbox" id="nt-tg"${st.telegram?' checked':''}><span>В Telegram (бот студии)</span></label>
       <div class="toolbar" style="margin-top:4px">${st.tgChatId ? '<span class="tag">✓ Telegram подключён</span>' : '<span class="small muted">Telegram ещё не подключён</span>'}
         <button type="button" class="btn sm" data-act="tg-link">${st.tgChatId ? 'Подключить заново' : 'Подключить Telegram'}</button></div></div>
-    <div class="field"><span class="small muted" style="font-weight:600">О чём сообщать</span>${TYPES.map(([k,l]) => `<label class="sw"><input type="checkbox" data-nt="${k}"${ty[k]?' checked':''}><span>${l}</span></label>`).join('')}</div>
+    <div class="field"><span class="small muted" style="font-weight:600">О чём сообщать</span>${TYPES.map(([k,l]) => `<label class="sw"><input type="checkbox" data-nt="${k}"${(k==='birthday'?ty[k]!==false:ty[k])?' checked':''}><span>${l}</span></label>`).join('')}</div>
+    ${canManageBirthdays(S.user)?`<div class="field"><label for="nt-birthday-days">Напоминать о дне рождения за дней</label><input class="input" id="nt-birthday-days" type="number" min="0" max="60" step="1" value="${st.birthdayDays??7}"><span class="small muted">От 0 до 60; 0 — только в день рождения. Напоминание также придёт в сам день.</span></div>`:''}
     <div class="grid3"><div class="field"><label for="nt-rem">Напомнить о дедлайне за</label><select class="input" id="nt-rem">${[15,30,60,120,180].map(n => `<option value="${n}"${Number(st.remindMin)===n?' selected':''}>${n<60?n+' мин':n/60+' ч'}</option>`).join('')}</select></div>
       <div class="field"><label for="nt-qf">Тихие часы с</label><input class="input" id="nt-qf" type="time" value="${st.quietFrom||''}"></div><div class="field"><label for="nt-qt">до</label><input class="input" id="nt-qt" type="time" value="${st.quietTo||''}"></div></div>
     ${onShift ? `<div class="field shift-rem"><span class="small muted" style="font-weight:600">Напоминание до выхода на смену</span>
@@ -4534,6 +4587,13 @@ function mergeChecklist(old, text){
 root.addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target; const v = id => document.getElementById(id)?.value ?? '';
+  if(f.id==='birthday-settings'){
+    run(async()=>{S.data.notify=await Api.call('saveNotify',{notify:{birthdayDays:Number(v('birthday-days')),types:{birthday:document.getElementById('birthday-enabled').checked}}});render();},'Напоминания сохранены');return;
+  }
+  if(f.dataset.birthday){
+    const id=f.dataset.birthday,birthDate=f.elements.birthDate.value,kind=f.dataset.personKind;
+    run(async()=>{const saved=await Api.call('saveBirthday',{id,birthDate,kind});const person=kind==='trainer'?trainerById(id):userById(id);if(person) person.birthDate=saved.birthDate;render();},'Дата рождения сохранена');return;
+  }
   if (f.id==='login-form'){
     const btn = document.getElementById('lg-btn'); btn.disabled = true; btn.textContent = 'Входим…';
     Auth.login(v('lg-login'), v('lg-pass')).catch(err => { const box = document.getElementById('lg-err'); if (box) box.textContent = err.message; btn.disabled=false; btn.textContent='Войти'; });
@@ -4629,7 +4689,7 @@ root.addEventListener('submit', e => {
     const shremEl = document.getElementById('nt-shrem');
     const sheveOff = !!document.getElementById('nt-sheve-off')?.checked;
     const sheveVal = String(v('nt-sheve')||'').trim();
-    const notify = { push:document.getElementById('nt-push').checked, telegram:document.getElementById('nt-tg').checked, types, remindMin:Number(v('nt-rem')),
+    const notify = { ...(canManageBirthdays(S.user)?{birthdayDays:Number(v('nt-birthday-days'))}:{}), push:document.getElementById('nt-push').checked, telegram:document.getElementById('nt-tg').checked, types, remindMin:Number(v('nt-rem')),
       quietFrom:v('nt-qf'), quietTo:v('nt-qt'), offDays:[...f.querySelectorAll('#nt-days input:checked')].map(i => Number(i.value)), onlyShifts: !!document.getElementById('nt-only')?.checked,
       shiftRemindMin: shremEl ? (Number(shremEl.value)||0) : 0,
       shiftEveAt: sheveOff ? '' : (/^\d{2}:\d{2}$/.test(sheveVal) ? sheveVal : '19:00') };
@@ -4653,7 +4713,7 @@ root.addEventListener('submit', e => {
     return;
   }
   if (f.id==='user-form'){
-    run(async () => { const u = await Api.call('saveUser', { user:{ id:f.dataset.id, fullName:v('uf-fio').trim(), phone:v('uf-ph').trim(), email:v('uf-em').trim() } }); replaceIn(S.data.users, u); S.modal=null; render(); }, 'Сохранено');
+    run(async () => { const u = await Api.call('saveUser', { user:{ id:f.dataset.id, fullName:v('uf-fio').trim(), phone:v('uf-ph').trim(), email:v('uf-em').trim(),birthDate:v('uf-birth') } }); replaceIn(S.data.users, u); S.modal=null; render(); }, 'Сохранено');
     return;
   }
   if (f.id==='trainer-form'){
@@ -4820,7 +4880,7 @@ const Push = {
    Автотесты (node vm) подставляют функцию и получают доступ к внутренностям панели для проверки вёрстки и демо-сервера. */
 if (typeof window!=='undefined' && typeof window.__SP_HOOK__==='function') window.__SP_HOOK__({
   S, Api, Auth, loadAll, render, buildAppHtml, switchTab, setNavOpen, getTabsList, getNavGroups, navGroupsHtml, presetBar, presetTargets, presetPrefill,
-  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, marketing:()=>viewExpenseTab('marketing'), utilities:()=>viewExpenseTab('utilities') },
+  views: { day:viewDay, sched:viewSched, rep:viewRep, cal:viewCal, stats:viewStats, pay:viewPay, rev:viewRev, guide:viewGuide, inventory:viewInventory, contacts:viewContacts, team:viewTeam, sal:viewSal, fin:viewFin, birthdays:viewBirthdays },
   modals: { preset:presetModal, copymonth:copyMonthModal, chain:()=>renderModal(), shifts:shiftsModal, notifyset:notifySetModal },
   computeNotifications, shiftStatus, durStr,
   parseOrdersCSV, calcFinance, calcPayroll, payPeople, applyCsvImport: (orders, month) => Api.call('importFinanceOrders', { month, orders }),
